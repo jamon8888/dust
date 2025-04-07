@@ -1,0 +1,78 @@
+# Optional: remove version: '3' if present
+
+services:
+  core: # -----------------------> Level 1 indentation
+    image: rust:1.85.0 # --------> Level 2 indentation
+    restart: always # ----------> Level 2 indentation
+    ports: # -------------------> Level 2 indentation
+      - "3001:3001" # -----------> Level 3 indentation
+    volumes: # -----------------> Level 2 indentation
+      - ./:/app # ---------------> Level 3 indentation
+    working_dir: /app/core # ---> Level 2 indentation
+    command: > # ---------------> Level 2 indentation
+      bash -c "apt-get update && apt-get install -y cmake build-essential &&
+      echo '>>> Building core-api...' &&
+      cargo build --release --bin core-api &&
+      echo '>>> Starting core-api...' &&
+      RUST_LOG=info cargo run --release --bin core-api -- server"
+    environment: # --------------> Level 2 indentation
+      - RUST_LOG=info # ---------> Level 3 indentation
+      - DATABASE_URL=postgres://dev:dev@db:5432/dust_databases_store # Level 3
+      - QDRANT_URL=http://qdrant_primary:6334 # Level 3
+      - ELASTICSEARCH_URL=http://elasticsearch:9200 # Level 3
+      - ELASTICSEARCH_USERNAME=elastic # Level 3
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD} # Level 3
+    networks:
+      - default
+
+  front: # -----------------------> Level 1 indentation
+    image: node:20.13.0 # -------> Level 2 indentation
+    restart: always # ----------> Level 2 indentation
+    ports: # -------------------> Level 2 indentation
+      - "3000:3000" # -----------> Level 3 indentation
+    volumes: # -----------------> Level 2 indentation
+      - ./:/app # ---------------> Level 3 indentation
+    working_dir: /app/front # ---> Level 2 indentation
+    command: > # ---------------> Level 2 indentation
+      bash -c "echo '>>> Building @dust-tt/client SDK for front...' &&
+      cd /app/sdks/js && npm install && npm install @types/node --save-dev && npm run build && cd /app/front &&
+      echo '>>> Installing front dependencies...' &&
+      npm install &&
+      echo '>>> Starting front dev server...' &&
+      NODE_ENV=development npm run dev"
+    environment: # --------------> Level 2 indentation
+      - NODE_ENV=development # --> Level 3 indentation
+      - DATABASE_URL=postgres://dev:dev@db:5432/dust_front
+      - CORE_API=http://core:3001
+      - CONNECTORS_API=http://connectors:3002
+      - DUST_DEVELOPMENT_SYSTEM_API_KEY=dev-system-api-key
+      - DUST_DEVELOPMENT_WORKSPACE_ID=dev-workspace-id
+      - SESSION_SECRET=local-session-secret
+      - SERVICE_ACCOUNT=dust-dev-service-account
+      - DUST_REGISTRY_SECRET=dev-registry-secret
+      - DUST_CONNECTORS_SECRET=dev-connectors-secret
+    networks:
+      - default
+
+  connectors: # -----------------> Level 1 indentation
+    image: node:20.13.0 # -------> Level 2 indentation
+    restart: always # ----------> Level 2 indentation
+    ports: # -------------------> Level 2 indentation
+      - "3002:3002" # -----------> Level 3 indentation
+    volumes: # -----------------> Level 2 indentation
+      - ./:/app # ---------------> Level 3 indentation
+    working_dir: /app/connectors # -> Level 2 indentation
+    command: > # ---------------> Level 2 indentation
+      bash -c "apt-get update && apt-get install -y poppler-utils &&
+      echo '>>> Building @dust-tt/client SDK...' &&
+      cd /app/sdks/js && npm install && npm install @types/node --save-dev && npm run build && cd /app/connectors &&
+      echo '>>> Installing connectors dependencies...' &&
+      npm install &&
+      echo '>>> Starting connectors web server...' &&
+      NODE_ENV=development npm run start:web"
+    environment: # --------------> Level 2 indentation
+      - NODE_ENV=development # --> Level 3 indentation
+      - DATABASE_URL=postgres://dev:dev@db:5432/dust_connectors
+      - DUST_CONNECTORS_SECRET=dev-connectors-secret
+    networks:
+      - default
