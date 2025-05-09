@@ -81,69 +81,39 @@ Check out our [user guides and developer platform](https://docs.dust.tt)
 docker compose up -d db redis qdrant_primary qdrant_secondary apache-tika elasticsearch kibana_settings kibana
 ```
 
-### 2. Construire et lancer les services principaux
+### 2. Construire les services principaux
 
 #### Service Core (Backend)
 
 ```bash
 docker build -t dust-core -f dockerfiles/core.Dockerfile .
-docker run -d --name dust-core --network dust_default -p 3001:3001 \
-  -e CORE_DATABASE_URI=postgres://dev:dev@db:5432/dust_api \
-  -e DATABASES_STORE_DATABASE_URI=postgres://dev:dev@db:5432/dust_databases_store \
-  -e REDIS_URL=redis://redis:6379 \
-  -e ELASTICSEARCH_URL=http://elastic:password@elasticsearch:9200 \
-  -e ELASTICSEARCH_USERNAME=elastic \
-  -e ELASTICSEARCH_PASSWORD=password \
-  -e QDRANT_CLUSTER_0_URL=http://qdrant_primary:6333 \
-  -e QDRANT_CLUSTER_0_API_KEY= \
-  dust-core
 ```
 
 #### Service Connectors
 
 ```bash
 docker build -t dust-connectors -f dockerfiles/connectors.Dockerfile .
-docker run -d --name dust-connectors --network dust_default -p 3002:3002 \
-  -e CONNECTORS_DATABASE_URI=postgres://dev:dev@db:5432/dust_connectors \
-  -e CORE_API_URL=http://dust-core:3001 \
-  -e DUST_CONNECTORS_SECRET=some_random_secret_value \
-  -e DUST_CONNECTORS_WEBHOOKS_SECRET=some_other_random_secret_value \
-  dust-connectors
 ```
 
 #### Service Frontend
 
 ```bash
 docker build -t dust-front -f dockerfiles/front.Dockerfile .
-docker run -d --name dust-front --network dust_default -p 3000:3000 \
-  -e FRONT_DATABASE_URI=postgres://dev:dev@db:5432/dust_front \
-  -e CORE_API_BASE_URL=http://dust-core:3001 \
-  -e CONNECTORS_API_BASE_URL=http://dust-connectors:3002 \
-  -e AUTH0_SECRET=292e55c63251da0556923a5f3aaeafa3c81be3cba33722b75b64ffe1edcb140d \
-  -e AUTH0_BASE_URL=http://localhost:3000 \
-  -e AUTH0_ISSUER_BASE_URL=https://dev-example.us.auth0.com \
-  -e AUTH0_CLIENT_ID=fakeClientId123456789 \
-  -e AUTH0_CLIENT_SECRET=fakeClientSecret123456789abcdef \
-  -e AUTH0_TENANT_DOMAIN_URL=dev-example.us.auth0.com \
-  -e NEXTAUTH_SECRET=292e55c63251da0556923a5f3aaeafa3c81be3cba33722b75b64ffe1edcb140d \
-  -e NEXTAUTH_URL=http://localhost:3000 \
-  dust-front
 ```
 
 #### Service Viz (Visualisation)
 
 ```bash
 docker build -t dust-viz -f dockerfiles/viz.Dockerfile .
-docker run -d --name dust-viz --network dust_default -p 3003:3000 dust-viz
 ```
 
-### 3. Proxy Nginx (optionnel)
+### 3. Lancer les services principaux
 
-Si vous souhaitez utiliser un proxy Nginx pour accéder à l'application :
+#### Service Core (Backend)
 
 ```bash
-cd proxy && docker build -t dust-proxy .
-cd .. && docker run -d --name dust-proxy --network dust_default -p 8080:80 dust-proxy
+docker compose up -d
+docker start dust-core dust-front dust-proxy dust-connectors dust-viz
 ```
 
 ### 4. Accéder à l'application
