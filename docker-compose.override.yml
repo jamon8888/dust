@@ -1,0 +1,30 @@
+version: '3'
+
+services:
+  front:
+    build:
+      context: .
+      dockerfile: dockerfiles/front.Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # Variables d'environnement Auth0
+      - AUTH0_SECRET=a_really_long_secret_value_with_at_least_32_characters
+      - AUTH0_BASE_URL=http://localhost:3000
+      - AUTH0_ISSUER_BASE_URL=https://dev-example.us.auth0.com
+      - AUTH0_DOMAIN=dev-example.us.auth0.com
+      - AUTH0_CLIENT_ID=fakeClientId123456789
+      - AUTH0_CLIENT_SECRET=fakeClientSecret123456789
+      - AUTH0_AUDIENCE=api://default
+      - AUTH0_SCOPE=openid profile email offline_access
+      # Variables de debug pour voir ce qui se passe 
+      - DEBUG=@auth0/nextjs-auth0:*
+      - NODE_ENV=development
+      # Autres variables nécessaires
+      - NEXT_PUBLIC_DUST_CLIENT_FACING_URL=http://localhost:3000
+    volumes:
+      - ./front:/app
+      - ./sdks:/sdks
+    depends_on:
+      - db
+    restart: unless-stopped 

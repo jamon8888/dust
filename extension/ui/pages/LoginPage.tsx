@@ -11,157 +11,163 @@ import {
   LoginIcon,
   Page,
   Spinner,
+  TextInput,
+  HelperMessage,
 } from "@dust-tt/sparkle";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 export const LoginPage = () => {
   const navigate = useNavigate();
+  const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(false);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+  const [email, setEmail] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [loginError, setLoginError] = useState<string | null>(null);
   const {
     user,
     isAuthenticated,
     authError,
     isUserSetup,
     handleLogin,
-    handleSelectWorkspace,
-    isLoading,
+    handleLogout,
   } = useAuth();
 
-  useEffect(() => {
-    if (isAuthenticated && isUserSetup) {
-      navigate("/");
+  const submitLogin = async () => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    
+    try {
+      // Vérifier que l'email et le mot de passe ne sont pas vides
+      if (!email || !password) {
+        setLoginError("Veuillez remplir tous les champs");
+        setIsLoggingIn(false);
+        return;
+      }
+      
+      // Envoyer les identifiants au serveur
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+        redirect: 'manual', // Important pour gérer nous-mêmes la redirection
+      });
+      
+      // Si c'est une redirection, suivre l'URL dans Location
+      if (response.status === 302) {
+        const redirectUrl = response.headers.get('Location');
+        if (redirectUrl) {
+          // Si l'authentification a réussi, appeler handleLogin
+          if (redirectUrl.startsWith('/w')) {
+            handleLogin(true);
+            navigate('/');
+            return;
+          }
+          // Sinon, suivre la redirection (pour Auth0 par exemple)
+          window.location.href = redirectUrl;
+          return;
+        }
+      }
+      
+      // Gérer les erreurs HTTP
+      if (!response.ok) {
+        const data = await response.json();
+        setLoginError(data.error?.message || "Erreur de connexion");
+        setIsLoggingIn(false);
+        return;
+      }
+      
+      // Si tout va bien, utiliser Auth0
+      handleLogin(true);
+      
+    } catch (error) {
+      console.error("Login error:", error);
+      setLoginError("Une erreur s'est produite lors de la connexion");
+    } finally {
+      setIsLoggingIn(false);
     }
-  }, [navigate, user, isAuthenticated, isUserSetup]);
+  };
 
-  const PRIVACY_POLICY_URL =
-    "https://dust-tt.notion.site/Website-Privacy-Policy-a118bb3472f945a1be8e11fbfb733084";
-  const TERMS_OF_USE_URL =
-    "https://dust-tt.notion.site/Website-Terms-of-Use-ff8665f52c454e0daf02195ec0d6bafb";
+  useEffect(() => {
+    const checkAuth = async () => {
+      setIsCheckingAuth(true);
+      try {
+        if (isAuthenticated && isUserSetup) {
+          navigate("/");
+        }
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
 
-  if (isLoading) {
+    void checkAuth();
+  }, [isAuthenticated, isUserSetup, navigate]);
+
+  if (isCheckingAuth) {
     return (
-      <div
-        className={cn(
-          "flex h-screen items-center justify-center",
-          "bg-background text-foreground",
-          "dark:bg-background-night dark:text-foreground-night"
-        )}
-      >
-        <Spinner />
-      </div>
+      <Page>
+        <div className="flex h-full w-full flex-1 items-center justify-center">
+          <Spinner size="lg" />
+        </div>
+      </Page>
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <div
-        className={cn(
-          "flex h-screen flex-col p-4",
-          "bg-background text-foreground",
-          "dark:bg-background-night dark:text-foreground-night"
-        )}
-      >
-        <div className="flex flex-1 flex-col items-center justify-center gap-8">
-          <div className="flex flex-col items-center text-center space-y-9 max-w-[400px]">
-            <Link to="https://dust.tt" target="_blank">
-              <DustLogo className="h-12 w-48" />
-            </Link>
-            <Page.SectionHeader title="Get more done, faster, with the power of your agents at your fingertips." />
+  return (
+    <Page>
+      <div className="flex flex-col h-full w-full items-center justify-center py-12">
+        <div className="flex min-h-[500px] w-full max-w-lg flex-col items-center justify-center px-8 py-8 sm:px-16">
+          <div className="mb-8 text-center text-gray-350">
+            <DustLogo className="mx-auto mb-6 h-12 w-12" />
+            <div className="w-full text-center text-2xl font-semibold tracking-tight text-gray-900">
+              Connexion à Dust
+            </div>
           </div>
-          {authError && authError.code === "user_not_found" && (
-            <>
-              <div className="text-center">
-                Please sign up to start using Dust extension.
-              </div>
-            </>
-          )}
-          {authError && authError.code !== "user_not_found" && (
-            <div className="text-center">{authError.message}</div>
-          )}
-
-          <div className="text-center gap-2 flex">
-            {authError && authError.code === "user_not_found" && (
-              <Link to="https://dust.tt/home">
-                <Button
-                  icon={LoginIcon}
-                  variant="primary"
-                  label="Sign up"
-                  onClick={() => {
-                    window.open(
-                      "https://dust.tt/api/auth/login?returnTo=/api/login&prompt=login&screen_hint=signup",
-                      "_blank"
-                    );
-                  }}
-                  size="md"
-                />
-              </Link>
+          
+          <div className="w-full space-y-4">
+            <TextInput
+              name="email"
+              placeholder="Adresse email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={isLoggingIn}
+              fullWidth
+            />
+            
+            <TextInput
+              name="password"
+              type="password"
+              placeholder="Mot de passe"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={isLoggingIn}
+              fullWidth
+            />
+            
+            {loginError && (
+              <HelperMessage type="error" message={loginError} />
             )}
-
+            
             <Button
-              icon={LoginIcon}
+              label="Se connecter"
+              onClick={submitLogin}
+              disabled={isLoggingIn}
               variant="primary"
-              label="Sign in"
-              onClick={() => handleLogin(!!authError)}
-              disabled={isLoading}
-              size="md"
+              className="mt-2 w-full"
+              icon={isLoggingIn ? <Spinner size="xs" /> : <LoginIcon />}
             />
           </div>
-        </div>
-        <p className="text-center text-muted-foreground dark:text-muted-foreground-night max-w-[300px] mx-auto">
-          By signing in, you agree to Dust's{" "}
-          <Link to={TERMS_OF_USE_URL} target="_blank" className="underline">
-            Terms of Use
-          </Link>{" "}
-          and{" "}
-          <Link to={PRIVACY_POLICY_URL} target="_blank" className="underline">
-            Privacy Policy
-          </Link>
-          .
-        </p>
-      </div>
-    );
-  }
-
-  if (isAuthenticated && !isUserSetup && user?.workspaces.length) {
-    return (
-      <div
-        className={cn(
-          "flex h-screen flex-col gap-2 p-4",
-          "bg-background text-foreground",
-          "dark:bg-background-night dark:text-foreground-night"
-        )}
-      >
-        <div className="flex h-full w-full flex-col items-center justify-center gap-4 text-center">
-          <Page.SectionHeader title="Almost there" />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                label="Pick a workspace"
-                variant="outline"
-                icon={ChevronDownIcon}
-              />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              {user.workspaces.map((w) => {
-                return (
-                  <DropdownMenuItem
-                    key={w.sId}
-                    onClick={() => void handleSelectWorkspace(w)}
-                    label={w.name}
-                  />
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          
+          <div className="mt-6 text-center text-sm text-gray-500">
+            Vous n'avez pas de compte ?{" "}
+            <Link to="/signup" className="text-action-500">
+              Créer un compte
+            </Link>
+          </div>
         </div>
       </div>
-    );
-  }
-
-  // Should never happen.
-  return (
-    <div className="flex h-screen items-center justify-center text-center">
-      <Page.SectionHeader title="Something unexpected occured, please contact us at support@dust.tt!" />
-    </div>
+    </Page>
   );
 };

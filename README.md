@@ -46,14 +46,16 @@ Check out our [user guides and developer platform](https://docs.dust.tt)
    cat > .env.local << EOL
    # Clé secrète pour Auth0 (générée avec openssl rand -hex 32)
    AUTH0_SECRET=292e55c63251da0556923a5f3aaeafa3c81be3cba33722b75b64ffe1edcb140d
+   AUTH0_BASE_URL=http://localhost:3000
+   AUTH0_ISSUER_BASE_URL=https://dev-example.us.auth0.com
+   AUTH0_CLIENT_ID=fakeClientId123456789
+   AUTH0_CLIENT_SECRET=fakeClientSecret123456789
 
    # URL de base de l'application
    APP_BASE_URL=http://localhost:3000
 
    # Informations fictives pour le développement local
    AUTH0_DOMAIN=https://dev-example.us.auth0.com
-   AUTH0_CLIENT_ID=fakeClientId123456789
-   AUTH0_CLIENT_SECRET=fakeClientSecret123456789abcdef
 
    # Variables NextAuth alternatives (pour compatibilité)
    NEXTAUTH_SECRET=292e55c63251da0556923a5f3aaeafa3c81be3cba33722b75b64ffe1edcb140d
