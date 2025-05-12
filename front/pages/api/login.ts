@@ -1,8 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getSession } from "@auth0/nextjs-auth0";
+import config from "@app/lib/api/config";
+import type { WithAPIErrorResponse } from "@app/types";
+import { apiError, withLogging } from "@app/logger/withlogging";
+
+import {
+  CoreAPI,
+  ModelProvider,
+  Plan,
+  Workspace,
+  getDataSource,
+} from "@dust-tt/types";
 
 import { getMembershipInvitationToken } from "@app/lib/api/invitation";
 import { evaluateWorkspaceSeatAvailability } from "@app/lib/api/workspace";
-import { getSession } from "@app/lib/auth";
 import { AuthFlowError, SSOEnforcedError } from "@app/lib/iam/errors";
 import {
   getPendingMembershipInvitationForEmailAndWorkspace,
@@ -18,7 +29,7 @@ import {
   findWorkspaceWithVerifiedDomain,
 } from "@app/lib/iam/workspaces";
 import type { MembershipInvitation } from "@app/lib/models/membership_invitation";
-import { Workspace } from "@app/lib/models/workspace";
+import { Workspace as WorkspaceModel } from "@app/lib/models/workspace";
 import { MembershipResource } from "@app/lib/resources/membership_resource";
 import { SubscriptionResource } from "@app/lib/resources/subscription_resource";
 import type { UserResource } from "@app/lib/resources/user_resource";
@@ -26,9 +37,7 @@ import { getSignUpUrl } from "@app/lib/signup";
 import { ServerSideTracking } from "@app/lib/tracking/server";
 import { renderLightWorkspaceType } from "@app/lib/workspace";
 import logger from "@app/logger/logger";
-import { apiError, withLogging } from "@app/logger/withlogging";
 import { launchUpdateUsageWorkflow } from "@app/temporal/usage_queue/client";
-import type { ActiveRoleType, Result, WithAPIErrorResponse } from "@app/types";
 import { Err, Ok } from "@app/types";
 
 // `membershipInvite` flow: we know we can add the user to the associated `workspaceId` as all the
@@ -41,7 +50,7 @@ async function handleMembershipInvite(
   Result<
     {
       flow: null;
-      workspace: Workspace;
+      workspace: WorkspaceModel;
     },
     AuthFlowError | SSOEnforcedError
   >
@@ -64,7 +73,7 @@ async function handleMembershipInvite(
     );
   }
 
-  const workspace = await Workspace.findOne({
+  const workspace = await WorkspaceModel.findOne({
     where: {
       id: membershipInvite.workspaceId,
     },
@@ -130,7 +139,7 @@ async function handleMembershipInvite(
 
 function canJoinTargetWorkspace(
   targetWorkspaceId: string | undefined,
-  workspace: Workspace | undefined,
+  workspace: WorkspaceModel | undefined,
   activeMemberships: MembershipResource[]
 ) {
   // If there is no target workspace id, return true.
@@ -158,14 +167,14 @@ async function handleEnterpriseSignUpFlow(
   enterpriseConnectionWorkspaceId: string
 ): Promise<{
   flow: "unauthorized" | null;
-  workspace: Workspace | null;
+  workspace: WorkspaceModel | null;
 }> {
   // Combine queries to optimize database calls.
   const [{ total }, workspace] = await Promise.all([
     MembershipResource.getActiveMemberships({
       users: [user],
     }),
-    Workspace.findOne({
+    WorkspaceModel.findOne({
       where: {
         sId: enterpriseConnectionWorkspaceId,
       },
@@ -223,7 +232,7 @@ async function handleRegularSignupFlow(
   Result<
     {
       flow: "no-auto-join" | "revoked" | null;
-      workspace: Workspace | null;
+      workspace: WorkspaceModel | null;
     },
     AuthFlowError | SSOEnforcedError
   >
@@ -329,145 +338,165 @@ async function handler(
   res: NextApiResponse<WithAPIErrorResponse<void>>
 ): Promise<void> {
   const session = await getSession(req, res);
-  if (!session) {
-    res.status(401).end();
-    return;
-  }
+  
+  // Traitement différent selon la méthode HTTP
+  if (req.method === "GET") {
+    // Si l'utilisateur n'est pas authentifié, on affiche la page de login
+    if (!session) {
+      res.redirect("/login");
+      return;
+    }
 
-  if (req.method !== "GET") {
-    return apiError(req, res, {
-      status_code: 405,
-      api_error: {
-        type: "method_not_supported_error",
-        message: "The method passed is not supported, GET is expected.",
-      },
-    });
-  }
+    const { inviteToken, wId } = req.query;
+    const targetWorkspaceId = typeof wId === "string" ? wId : undefined;
+    // Auth0 flow augments token with a claim for workspace id linked to the enterprise connection.
+    const enterpriseConnectionWorkspaceId =
+      session.user["https://dust.tt/workspaceId"];
 
-  const { inviteToken, wId } = req.query;
-  const targetWorkspaceId = typeof wId === "string" ? wId : undefined;
-  // Auth0 flow augments token with a claim for workspace id linked to the enterprise connection.
-  const enterpriseConnectionWorkspaceId =
-    session.user["https://dust.tt/workspaceId"];
+    let targetWorkspace: WorkspaceModel | null = null;
+    // `members` scope augments token with the list of all workspaces the user is a member of. If present
+    // we use it to validate target workspace claims.
+    const dataSource = getDataSource();
+    const coreAPI = new CoreAPI(config.getCoreAPIConfig());
 
-  let targetWorkspace: Workspace | null = null;
-  // `membershipInvite` is set to a `MembeshipInvitation` if the query includes an `inviteToken`,
-  // meaning the user is going through the invite by email flow.
-  const membershipInviteRes =
-    await getPendingMembershipInvitationForToken(inviteToken);
-  if (membershipInviteRes.isErr()) {
-    const { error } = membershipInviteRes;
+    if (targetWorkspaceId) {
+      const workspace = await dataSource.getWorkspace(targetWorkspaceId);
+      if (workspace) {
+        const membership = await dataSource.getUserMembership(
+          workspace.id,
+          session.user.sub
+        );
+        if (membership) {
+          targetWorkspace = workspace;
+        }
+      }
+    } else if (enterpriseConnectionWorkspaceId) {
+      // Verify the workspace exists.
+      const workspace = await dataSource.getWorkspace(
+        enterpriseConnectionWorkspaceId
+      );
+      if (workspace) {
+        targetWorkspace = workspace;
+      }
+    } else if (inviteToken && typeof inviteToken === "string") {
+      try {
+        const inviteRes = await coreAPI.getInviteFromToken({
+          inviteToken,
+        });
+        if (inviteRes.isOk() && inviteRes.value.invite) {
+          const workspace = await dataSource.getWorkspace(
+            inviteRes.value.invite.workspaceId
+          );
+          if (workspace) {
+            targetWorkspace = workspace;
+          }
+        }
+      } catch (e) {
+        console.error("Failed to verify invite token:", e);
+      }
+    }
 
-    if (error instanceof AuthFlowError) {
+    if (targetWorkspace) {
+      res.redirect(`/w/${targetWorkspace.sId}`);
+      return;
+    }
+
+    // If we got here, no workspace to target, so send to the first one or create a new one
+    // if the user is not a member of any workspace.
+    const workspaces = await dataSource.listUserMemberships(session.user.sub);
+    if (workspaces.length > 0) {
+      res.redirect(`/w/${workspaces[0].sId}`);
+      return;
+    }
+
+    // No workspaces found: we create and setup a new one for the user.
+    try {
+      const newWorkspaceRes = await coreAPI.createWorkspace({
+        name: session.user.name || "My Workspace",
+        plan: Plan.Free,
+        type: "personal",
+        creatorUserId: session.user.sub,
+        enabledModelProviders: [ModelProvider.OpenAI, ModelProvider.Anthropic],
+      });
+
+      if (newWorkspaceRes.isErr()) {
+        console.error(
+          "Error creating workspace:",
+          newWorkspaceRes.error.message
+        );
+        res.redirect("/login-error");
+        return;
+      }
+      const newWorkspace = newWorkspaceRes.value.workspace;
+
+      res.redirect(`/w/${newWorkspace.sId}`);
+    } catch (err) {
+      console.error("Error creating a workspace for the user:", err);
+      res.redirect("/login-error");
+    }
+  } else if (req.method === "POST") {
+    // Traitement de la requête POST pour l'authentification
+    try {
+      const { email, password } = req.body;
+      
+      if (!email || !password) {
+        return apiError(req, res, {
+          status_code: 400,
+          api_error: {
+            type: "invalid_request_error",
+            message: "Email and password are required",
+          },
+        });
+      }
+      
+      // Appel à notre nouvel endpoint d'authentification
+      const authResponse = await fetch(`${req.headers.host?.includes('localhost') ? 'http' : 'https'}://${req.headers.host}/api/auth/oauth-login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
+      
+      if (!authResponse.ok) {
+        const errorData = await authResponse.json();
+        return apiError(req, res, {
+          status_code: authResponse.status,
+          api_error: {
+            type: "authentication_error",
+            message: errorData.error?.message || "Authentication failed",
+          },
+        });
+      }
+      
+      // Si l'authentification réussit, créer une session et rediriger
+      const data = await authResponse.json();
+      
+      // En production, il faudrait utiliser Auth0 pour créer une vraie session
+      // Pour le moment, on redirige simplement vers la page principale
+      res.setHeader("Location", "/w");
+      res.status(302).end();
+      
+    } catch (error) {
+      console.error("Authentication error:", error);
       return apiError(req, res, {
-        status_code: 400,
+        status_code: 500,
         api_error: {
-          type: "invalid_request_error",
-          message: error.message,
+          type: "internal_server_error",
+          message: "An error occurred during authentication",
         },
       });
     }
-
-    throw error;
-  }
-
-  const membershipInvite = membershipInviteRes.value;
-
-  // Login flow: first step is to attempt to find the user.
-  const { created: userCreated, user } = await createOrUpdateUser(session);
-
-  // Prioritize enterprise connections.
-  if (enterpriseConnectionWorkspaceId) {
-    const { flow, workspace } = await handleEnterpriseSignUpFlow(
-      user,
-      enterpriseConnectionWorkspaceId
-    );
-    if (flow) {
-      res.redirect(`/api/auth/logout?returnTo=/login-error?reason=${flow}`);
-      return;
-    }
-
-    targetWorkspace = workspace;
   } else {
-    if (userCreated) {
-      // When user is just created, check whether they have a pending invitation. If they do, it is
-      // assumed they are coming from the invitation link and have seen the join page; we redirect
-      // (after auth0 login) to this URL with inviteToken appended. The user will then end up on the
-      // workspace's welcome page (see comment's PR)
-      const pendingInvitationAndWorkspace =
-        await getPendingMembershipInvitationWithWorkspaceForEmail(user.email);
-      if (pendingInvitationAndWorkspace) {
-        const { invitation: pendingInvitation } = pendingInvitationAndWorkspace;
-        const signUpUrl = getSignUpUrl({
-          signupCallbackUrl: `/api/login?inviteToken=${getMembershipInvitationToken(pendingInvitation.id)}`,
-          invitationEmail: pendingInvitation.inviteEmail,
-        });
-        res.redirect(signUpUrl);
-        return;
-      }
-    }
-
-    const loginFctn = membershipInvite
-      ? async () => handleMembershipInvite(user, membershipInvite)
-      : async () => handleRegularSignupFlow(session, user, targetWorkspaceId);
-
-    const result = await loginFctn();
-    if (result.isErr()) {
-      const { error } = result;
-
-      if (error instanceof AuthFlowError) {
-        logger.error(
-          {
-            error,
-          },
-          "Error during login flow."
-        );
-        res.redirect(
-          `/api/auth/logout?returnTo=/login-error?reason=${error.code}`
-        );
-        return;
-      }
-
-      // Delete newly created user if SSO is mandatory.
-      if (userCreated) {
-        await user.unsafeDelete();
-      }
-
-      res.redirect(
-        `/api/auth/logout?returnTo=/sso-enforced?workspaceId=${error.workspaceId}`
-      );
-      return;
-    }
-
-    const { flow, workspace } = result.value;
-    if (flow) {
-      res.redirect(`/no-workspace?flow=${flow}`);
-      return;
-    }
-
-    targetWorkspace = workspace;
+    // Méthode HTTP non supportée
+    res.setHeader("Allow", ["GET", "POST"]);
+    res.status(405).json({
+      error: {
+        type: "method_not_allowed",
+        message: `Method ${req.method} Not Allowed`,
+      },
+    });
   }
-
-  const u = await getUserFromSession(session);
-  if (!u || u.workspaces.length === 0) {
-    res.redirect("/no-workspace?flow=revoked");
-    return;
-  }
-
-  if (targetWorkspace) {
-    // For users joining a workspace from trying to access a conversation, we redirect to this
-    // conversation after signing in.
-    if (req.query.join === "true" && req.query.cId) {
-      res.redirect(`/w/${targetWorkspace.sId}/welcome?cId=${req.query.cId}`);
-      return;
-    }
-    res.redirect(`/w/${targetWorkspace.sId}/welcome`);
-    return;
-  }
-
-  res.redirect(`/w/${u.workspaces[0].sId}`);
-
-  return;
 }
 
 export async function createAndLogMembership({
@@ -476,7 +505,7 @@ export async function createAndLogMembership({
   role,
 }: {
   user: UserResource;
-  workspace: Workspace;
+  workspace: WorkspaceModel;
   role: ActiveRoleType;
 }) {
   const m = await MembershipResource.createMembership({
@@ -498,5 +527,4 @@ export async function createAndLogMembership({
   return m;
 }
 
-// Note from seb: Should it be withSessionAuthentication?
 export default withLogging(handler);
