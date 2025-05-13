@@ -127,3 +127,9 @@ docker start dust-core dust-front dust-proxy dust-connectors dust-viz
 - Visualisation : http://localhost:3003
 - Elasticsearch : http://localhost:9200
 - Kibana : http://localhost:5601
+
+### 5. MCP Servers
+```bash
+cd mcp-project
+./start.sh
+```

@@ -610,6 +610,8 @@ async function getConversationRankVersionLock(
   // Get a lock using the unique lock key (number withing postgresql BigInt range).
   const hash = md5(`conversation_message_rank_version_${conversation.id}`);
   const lockKey = parseInt(hash, 16) % 9999999999;
+  // OK because we need to setup a lock
+  // eslint-disable-next-line dust/no-raw-sql
   await frontSequelize.query("SELECT pg_advisory_xact_lock(:key)", {
     transaction: t,
     replacements: { key: lockKey },
@@ -820,7 +822,8 @@ export async function* postUserMessage(
               await UserMessage.create(
                 {
                   content,
-                  localMCPServerIds: context.localMCPServerIds ?? [],
+                  // TODO(MCP Clean-up): Rename field in DB.
+                  clientSideMCPServerIds: context.clientSideMCPServerIds ?? [],
                   userContextUsername: context.username,
                   userContextTimezone: context.timezone,
                   userContextFullName: context.fullName,
@@ -1316,8 +1319,8 @@ export async function* editUserMessage(
               await UserMessage.create(
                 {
                   content,
-                  // No support for local MCP servers when editing/retrying a user message.
-                  localMCPServerIds: [],
+                  // No support for client-side MCP servers when editing/retrying a user message.
+                  clientSideMCPServerIds: [],
                   userContextUsername: userMessageRow.userContextUsername,
                   userContextTimezone: userMessageRow.userContextTimezone,
                   userContextFullName: userMessageRow.userContextFullName,
