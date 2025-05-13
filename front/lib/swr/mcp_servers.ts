@@ -2,9 +2,10 @@ import { useSendNotification } from "@dust-tt/sparkle";
 import { useMemo } from "react";
 import type { Fetcher } from "swr";
 
+import type { RemoteMCPToolStakeLevelType } from "@app/lib/actions/constants";
 import { mcpServersSortingFn } from "@app/lib/actions/mcp_helper";
-import type { MCPServerType } from "@app/lib/api/mcp";
-import { fetcher, useSWRWithDefaults } from "@app/lib/swr/swr";
+import type { MCPServerType, MCPServerTypeWithViews } from "@app/lib/api/mcp";
+import { emptyArray, fetcher, useSWRWithDefaults } from "@app/lib/swr/swr";
 import type {
   CreateMCPServerResponseBody,
   GetMCPServersResponseBody,
@@ -21,7 +22,7 @@ import type {
   GetConnectionsResponseBody,
   PostConnectionResponseBody,
 } from "@app/pages/api/w/[wId]/mcp/connections";
-import type { LightWorkspaceType, SpaceType } from "@app/types";
+import type { LightWorkspaceType, OAuthProvider, SpaceType } from "@app/types";
 
 /**
  * Hook to fetch a specific remote MCP server by ID
@@ -73,7 +74,7 @@ export function useAvailableMCPServers({
     ? `/api/w/${owner.sId}/spaces/${space.sId}/mcp/available`
     : `/api/w/${owner.sId}/mcp/available`;
 
-  const { data, error } = useSWRWithDefaults(url, configFetcher);
+  const { data, error, mutate } = useSWRWithDefaults(url, configFetcher);
 
   const availableMCPServers = useMemo(
     () =>
@@ -81,7 +82,7 @@ export function useAvailableMCPServers({
         ? data.servers.sort((a, b) =>
             mcpServersSortingFn({ mcpServer: a }, { mcpServer: b })
           )
-        : [],
+        : emptyArray<MCPServerTypeWithViews>(),
     [data]
   );
 
@@ -89,6 +90,7 @@ export function useAvailableMCPServers({
     availableMCPServers,
     isAvailableMCPServersLoading: !error && !data,
     isAvailableMCPServersError: error,
+    mutateAvailableMCPServers: mutate,
   };
 }
 
@@ -111,7 +113,7 @@ export function useMCPServers({
     }
   );
 
-  const mcpServers = useMemo(() => (data ? data.servers : []), [data]);
+  const mcpServers = data?.servers ?? emptyArray();
 
   return {
     mcpServers,
@@ -325,7 +327,7 @@ export function useMCPServerConnections({
   );
 
   return {
-    connections: useMemo(() => (data ? data.connections : []), [data]),
+    connections: data?.connections ?? emptyArray(),
     isConnectionsLoading: !error && !data && !disabled,
     isConnectionsError: error,
     mutateConnections: mutate,
@@ -345,9 +347,11 @@ export function useCreateMCPServerConnection({
   const createMCPServerConnection = async ({
     connectionId,
     mcpServerId,
+    provider,
   }: {
     connectionId: string;
     mcpServerId: string;
+    provider: OAuthProvider;
   }): Promise<PostConnectionResponseBody> => {
     const response = await fetch(`/api/w/${owner.sId}/mcp/connections`, {
       method: "POST",
@@ -357,6 +361,7 @@ export function useCreateMCPServerConnection({
       body: JSON.stringify({
         connectionId,
         mcpServerId,
+        provider,
       }),
     });
     if (response.ok) {
@@ -476,7 +481,7 @@ export function useUpdateMCPServerToolsPermissions({
     permission,
   }: {
     toolName: string;
-    permission: string;
+    permission: RemoteMCPToolStakeLevelType;
   }): Promise<PatchMCPServerToolsPermissionsResponseBody> => {
     const response = await fetch(
       `/api/w/${owner.sId}/mcp/${serverId}/tools/${toolName}`,

@@ -25,12 +25,15 @@ import { getResourceIdFromSId, makeSId } from "@app/lib/resources/string_ids";
 import type { ResourceFindOptions } from "@app/lib/resources/types";
 import { UserResource } from "@app/lib/resources/user_resource";
 import type {
+  AgentConfigurationType,
   GroupKind,
   GroupType,
+  LightAgentConfigurationType,
   LightWorkspaceType,
   ModelId,
   ResourcePermission,
   Result,
+  RolePermission,
   UserType,
 } from "@app/types";
 import { Err, Ok, removeNulls } from "@app/types";
@@ -79,7 +82,7 @@ export class GroupResource extends BaseResource<GroupModel> {
     const defaultGroup = await GroupResource.makeNew(
       {
         workspaceId: workspace.id,
-        name: `Group for Agent ${agent.name}`,
+        name: `Group for Agent ${agent.name} (${agent.sId})`,
         kind: "agent_editors",
       },
       { transaction }
@@ -112,6 +115,84 @@ export class GroupResource extends BaseResource<GroupModel> {
     }
 
     return defaultGroup;
+  }
+
+  static async findAgentIdsForGroups(
+    auth: Authenticator,
+    groupIds: ModelId[]
+  ): Promise<{ agentConfigurationId: ModelId; groupId: ModelId }[]> {
+    const owner = auth.getNonNullableWorkspace();
+
+    const groupAgents = await GroupAgentModel.findAll({
+      where: {
+        groupId: {
+          [Op.in]: groupIds,
+        },
+        workspaceId: owner.id,
+      },
+      attributes: ["agentConfigurationId", "groupId"],
+    });
+    return groupAgents.map((ga) => ({
+      agentConfigurationId: ga.agentConfigurationId,
+      groupId: ga.groupId,
+    }));
+  }
+
+  /**
+   * Finds the specific editor group associated with an agent configuration.
+   */
+  static async findEditorGroupForAgent(
+    auth: Authenticator,
+    agent: LightAgentConfigurationType
+  ): Promise<Result<GroupResource, Error>> {
+    const owner = auth.getNonNullableWorkspace();
+
+    const groupAgents = await GroupAgentModel.findAll({
+      where: {
+        agentConfigurationId: agent.id,
+        workspaceId: owner.id,
+      },
+      attributes: ["groupId"],
+    });
+
+    if (groupAgents.length === 0) {
+      return new Err(
+        new DustError(
+          "group_not_found",
+          "Editor group association not found for agent."
+        )
+      );
+    }
+
+    if (groupAgents.length > 1) {
+      return new Err(
+        new Error("Multiple editor group associations found for agent.")
+      );
+    }
+
+    const groupAgent = groupAgents[0];
+
+    const group = await GroupResource.fetchById(
+      auth,
+      GroupResource.modelIdToSId({
+        id: groupAgent.groupId,
+        workspaceId: owner.id,
+      })
+    );
+
+    if (group.isErr()) {
+      return group;
+    }
+
+    if (group.value.kind !== "agent_editors") {
+      // Should not happen based on creation logic, but good to check.
+      // Might change when we allow other group kinds to be associated with agents.
+      return new Err(
+        new Error("Associated group is not an agent_editors group.")
+      );
+    }
+
+    return group;
   }
 
   static async makeDefaultsForWorkspace(workspace: LightWorkspaceType) {
@@ -339,6 +420,64 @@ export class GroupResource extends BaseResource<GroupModel> {
     return new Ok(groups);
   }
 
+  static async fetchByAgentConfiguration({
+    auth,
+    agentConfiguration,
+    isDeletionFlow = false,
+  }: {
+    auth: Authenticator;
+    agentConfiguration: AgentConfiguration | AgentConfigurationType;
+    isDeletionFlow?: boolean;
+  }): Promise<GroupResource | null> {
+    const workspace = auth.getNonNullableWorkspace();
+    const groupAgents = await GroupAgentModel.findAll({
+      where: {
+        agentConfigurationId: agentConfiguration.id,
+        workspaceId: workspace.id,
+      },
+      include: [
+        {
+          model: GroupModel,
+          where: {
+            workspaceId: workspace.id,
+            kind: "agent_editors",
+          },
+          required: true,
+        },
+      ],
+    });
+
+    if (
+      agentConfiguration.status === "draft" ||
+      agentConfiguration.scope === "global"
+    ) {
+      if (groupAgents.length === 0) {
+        return null;
+      }
+      throw new Error(
+        "Unexpected: draft or global agent shouldn't have an editor group."
+      );
+    }
+
+    // In the case of agents deletion, it is possible that the agent has no
+    // editor group associated with it, because the group may have been deleted
+    // when deleting another version of the agent with the same sId.
+    if (isDeletionFlow && groupAgents.length === 0) {
+      return null;
+    }
+
+    // In other cases, the agent should always have exactly one editor group.
+    if (groupAgents.length !== 1) {
+      throw new Error(
+        "Unexpected: agent should have exactly one editor group."
+      );
+    }
+
+    const group = await groupAgents[0].getGroup();
+
+    return new this(GroupModel, group.get());
+  }
+
   static async fetchWorkspaceSystemGroup(
     auth: Authenticator
   ): Promise<Result<GroupResource, DustError>> {
@@ -403,7 +542,7 @@ export class GroupResource extends BaseResource<GroupModel> {
   static async listUserGroupsInWorkspace({
     user,
     workspace,
-    groupKinds = ["global", "regular"],
+    groupKinds = ["global", "regular", "agent_editors"],
   }: {
     user: UserResource;
     workspace: LightWorkspaceType;
@@ -462,6 +601,30 @@ export class GroupResource extends BaseResource<GroupModel> {
     return groups.map((group) => new this(GroupModel, group.get()));
   }
 
+  async isMember(auth: Authenticator): Promise<boolean> {
+    const owner = auth.getNonNullableWorkspace();
+
+    if (this.isGlobal()) {
+      return true;
+    }
+
+    if (this.isSystem()) {
+      return false;
+    }
+
+    const membership = await GroupMembershipModel.findOne({
+      where: {
+        groupId: this.id,
+        workspaceId: owner.id,
+        startAt: { [Op.lte]: new Date() },
+        [Op.or]: [{ endAt: null }, { endAt: { [Op.gt]: new Date() } }],
+        userId: auth.getNonNullableUser().id,
+      },
+    });
+
+    return !!membership;
+  }
+
   async getActiveMembers(auth: Authenticator): Promise<UserResource[]> {
     const owner = auth.getNonNullableWorkspace();
 
@@ -507,7 +670,10 @@ export class GroupResource extends BaseResource<GroupModel> {
   ): Promise<Result<undefined, DustError>> {
     if (!this.canWrite(auth)) {
       return new Err(
-        new DustError("unauthorized", "Only `admins` can administer groups")
+        new DustError(
+          "unauthorized",
+          "Only admins or group editors can change group members"
+        )
       );
     }
     const owner = auth.getNonNullableWorkspace();
@@ -539,8 +705,8 @@ export class GroupResource extends BaseResource<GroupModel> {
         new DustError(
           "user_not_member",
           userIds.length === 1
-            ? "User is not a member of the workspace"
-            : "Users are not members of the workspace"
+            ? "Cannot add: user is not a member of the workspace"
+            : "Cannot add: users are not members of the workspace"
         )
       );
     }
@@ -566,8 +732,8 @@ export class GroupResource extends BaseResource<GroupModel> {
         new DustError(
           "user_already_member",
           alreadyActiveUserIds.length === 1
-            ? "User is already a member of the group"
-            : "Users are already members of the group"
+            ? "Cannot add: user is already a member of the group"
+            : "Cannot add: users are already members of the group"
         )
       );
     }
@@ -601,7 +767,10 @@ export class GroupResource extends BaseResource<GroupModel> {
   ): Promise<Result<undefined, DustError>> {
     if (!this.canWrite(auth)) {
       return new Err(
-        new DustError("unauthorized", "Only `admins` can administer groups")
+        new DustError(
+          "unauthorized",
+          "Only admins or group editors can change group members"
+        )
       );
     }
     const owner = auth.getNonNullableWorkspace();
@@ -629,18 +798,17 @@ export class GroupResource extends BaseResource<GroupModel> {
         new DustError(
           "user_not_member",
           userIds.length === 1
-            ? "User is not a member of the workspace"
-            : "Users are not members of the workspace"
+            ? "Cannot remove: user is not a member of the workspace"
+            : "Cannot remove: users are not members of the workspace"
         )
       );
     }
 
-    // Users can only be added to regular groups.
-    if (this.kind !== "regular") {
+    if (this.kind !== "regular" && this.kind !== "agent_editors") {
       return new Err(
         new DustError(
           "system_or_global_group",
-          "Users can only be added to regular groups."
+          "Users can only be removed from regular or agent_editors groups."
         )
       );
     }
@@ -656,8 +824,8 @@ export class GroupResource extends BaseResource<GroupModel> {
         new DustError(
           "user_not_member",
           notActiveUserIds.length === 1
-            ? "User is not a member of the group"
-            : "Users are not members of the group"
+            ? "Cannot remove: user is not a member of the group"
+            : "Cannot remove: users are not members of the group"
         )
       );
     }
@@ -771,6 +939,13 @@ export class GroupResource extends BaseResource<GroupModel> {
         transaction,
       });
 
+      await GroupAgentModel.destroy({
+        where: {
+          groupId: this.id,
+        },
+        transaction,
+      });
+
       await GroupMembershipModel.destroy({
         where: {
           groupId: this.id,
@@ -802,11 +977,27 @@ export class GroupResource extends BaseResource<GroupModel> {
    *
    * For agent_editors groups, the permissions are:
    * 1. Group-based: The group's members get read and write access
-   * 2. Role-based: Workspace admins get read and write access
+   * 2. Role-based: Workspace admins get read and write access. All users can
+   *    read "agent_editors" groups.
    *
-   * @returns Array of ResourcePermission objects defining the default access configuration
+   * CAUTION: if / when editing, note that for role permissions, permissions are
+   * NOT inherited, i.e. if you set a permission for role "user", an "admin"
+   * will NOT have it
+   *
+   * @returns Array of ResourcePermission objects defining the default access
+   * configuration
    */
   requestedPermissions(): ResourcePermission[] {
+    const userReadPermissions: RolePermission[] = [
+      {
+        role: "user",
+        permissions: ["read"],
+      },
+      {
+        role: "builder",
+        permissions: ["read"],
+      },
+    ];
     return [
       {
         groups: [
@@ -816,7 +1007,10 @@ export class GroupResource extends BaseResource<GroupModel> {
               this.kind === "agent_editors" ? ["read", "write"] : ["read"],
           },
         ],
-        roles: [{ role: "admin", permissions: ["read", "write", "admin"] }],
+        roles: [
+          { role: "admin", permissions: ["read", "write", "admin"] },
+          ...(this.kind === "agent_editors" ? userReadPermissions : []),
+        ],
         workspaceId: this.workspaceId,
       },
     ];

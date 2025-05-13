@@ -79,6 +79,22 @@ Example:
 No sensitive data should be sent to our servers through URL or query string parameters. HTTP body or
 headers only are acceptable for sensitive data.
 
+### [SEC2] No ModelId exposure in URLs or API endpoints
+
+Never expose or accept ModelId in URLs, API endpoints or POST/PATCH payloads. Use string identifiers
+(sId) instead. This applies to all routes, including GET, POST, PATCH, and DELETE methods. ModelIds
+should be strictly internal and never exposed to the client.
+
+Example:
+
+```
+// BAD
+/api/w/[wId]/resource/[modelId]
+
+// GOOD
+/api/w/[wId]/resource/[sId]
+```
+
 ## ERROR
 
 ### [ERR1] Do not rely on throw + catch
@@ -245,8 +261,13 @@ export function Component({ name }: MyComponentProps) { }
 
 ### [REACT2] All network operations should be abstracted in SWR files
 
-Data fetching should rely on useSWR hooks and be abstracted in a `lib/swr/*` file. Data posting
-should be done in hooks colocated with the SWR hooks. Do not fetch direclty in componenets.
+Data fetching should rely on useSWR hooks and be abstracted in a `lib/swr/*` file.
+
+When using a disabled param and returning a loading flag, ensure `loading` is `false` if `disabled`
+is `true`.
+
+When a hook is expected to return an array of objects, return an empty array (from `emptyArray()`)
+while loading/error/disabled instead of `undefined`.
 
 Example:
 
@@ -255,9 +276,19 @@ export function useFolders({ owner, spaceId } : { owner: LightWorkspaceType, spa
   // ...
   const { data, error, mutate } = useSWRWithDefaults(...);
   // ...
-  return { folders, mutate, isFoldersLoading, isFoldersError };
+  return {
+    folders: data?.folders ?? emptyArray(),
+    mutate,
+    isFoldersLoading: !error && !data && !disabled,
+    isFoldersError: error
+  };
 }
+```
 
+Data posting should be done in hooks colocated with the SWR hooks. Do not fetch directly in
+components. Success and failure notifications should be sent from the hook.
+
+```
 export function useCreateFolder({
   owner,
   spaceId,
@@ -271,8 +302,6 @@ export function useCreateFolder({
     // ...
   };
 };
-
-
 ```
 
 ### [REACT3] Any async network operation should have a visual loading state

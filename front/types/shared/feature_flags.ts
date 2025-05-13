@@ -1,5 +1,6 @@
 export const WHITELISTABLE_FEATURES = [
   "advanced_notion_management",
+  "agent_discovery",
   "claude_3_7_reasoning",
   "co_edition",
   "deepseek_feature",
@@ -24,6 +25,7 @@ export const WHITELISTABLE_FEATURES = [
   "salesforce_feature",
   "show_debug_tools",
   "usage_data_api",
+  "custom_webcrawler",
 ] as const;
 export type WhitelistableFeature = (typeof WHITELISTABLE_FEATURES)[number];
 export function isWhitelistableFeature(

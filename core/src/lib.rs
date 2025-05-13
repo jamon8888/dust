@@ -79,6 +79,7 @@ pub mod providers {
     pub mod togetherai;
 }
 pub mod http {
+    pub mod network;
     pub mod request;
 }
 pub mod blocks {
@@ -131,6 +132,7 @@ pub mod oauth {
         pub mod github;
         pub mod gong;
         pub mod google_drive;
+        pub mod hubspot;
         pub mod intercom;
         pub mod microsoft;
         pub mod mock;

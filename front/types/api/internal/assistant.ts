@@ -16,7 +16,7 @@ export const InternalPostMessagesRequestBodySchema = t.type({
       profilePictureUrl: t.union([t.string, t.null]),
     }),
     t.partial({
-      localMCPServerIds: t.array(t.string),
+      clientSideMCPServerIds: t.array(t.string),
     }),
   ]),
 });
@@ -205,6 +205,15 @@ export const InternalPostBuilderSuggestionsRequestBodySchema = t.union([
   t.type({
     type: t.literal("description"),
     inputs: t.type({ instructions: t.string, name: t.string }),
+  }),
+  t.type({
+    type: t.literal("tags"),
+    inputs: t.type({
+      instructions: t.string,
+      description: t.string,
+      isAdmin: t.boolean,
+      tags: t.array(t.string),
+    }),
   }),
 ]);
 

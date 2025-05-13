@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ConfigurableToolInputJSONSchemas } from "@app/lib/actions/mcp_internal_actions/input_schemas";
 
-import { findMatchingSchemaKeys } from "./json_schemas";
+import { findMatchingSubSchemas } from "./json_schemas";
 
 describe("JSON Schema Utilities", () => {
   describe("findMatchingSchemaKeys", () => {
@@ -27,7 +27,7 @@ describe("JSON Schema Utilities", () => {
                       },
                       mimeType: {
                         type: "string",
-                        const: "application/vnd.dust.configuration.string",
+                        const: "application/vnd.dust.tool-input.string",
                       },
                     },
                     required: ["value", "mimeType"],
@@ -42,7 +42,7 @@ describe("JSON Schema Utilities", () => {
                       },
                       mimeType: {
                         type: "string",
-                        const: "application/vnd.dust.configuration.boolean",
+                        const: "application/vnd.dust.tool-input.boolean",
                       },
                     },
                     required: ["value", "mimeType"],
@@ -62,7 +62,7 @@ describe("JSON Schema Utilities", () => {
                       },
                       mimeType: {
                         type: "string",
-                        const: "application/vnd.dust.configuration.number",
+                        const: "application/vnd.dust.tool-input.number",
                       },
                     },
                     required: ["value", "mimeType"],
@@ -77,7 +77,7 @@ describe("JSON Schema Utilities", () => {
                       },
                       mimeType: {
                         type: "string",
-                        const: "application/vnd.dust.configuration.boolean",
+                        const: "application/vnd.dust.tool-input.boolean",
                       },
                     },
                     required: ["value", "mimeType"],
@@ -92,13 +92,11 @@ describe("JSON Schema Utilities", () => {
       };
 
       // Look for STRING configuration schema
-      const targetSchema =
-        ConfigurableToolInputJSONSchemas[
-          INTERNAL_MIME_TYPES.CONFIGURATION.STRING
-        ];
-
-      const result = findMatchingSchemaKeys(mainSchema, targetSchema);
-      expect(result).toContain("config.userPreferences.theme");
+      const result = findMatchingSubSchemas(
+        mainSchema,
+        INTERNAL_MIME_TYPES.TOOL_INPUT.STRING
+      );
+      expect(Object.keys(result)).toContain("config.userPreferences.theme");
     });
 
     it("should return array item keys when array items match the target schema", () => {
@@ -123,7 +121,7 @@ describe("JSON Schema Utilities", () => {
                       },
                       mimeType: {
                         type: "string",
-                        const: "application/vnd.dust.configuration.data-source",
+                        const: "application/vnd.dust.tool-input.data-source",
                       },
                     },
                     required: ["uri", "mimeType"],
@@ -146,7 +144,7 @@ describe("JSON Schema Utilities", () => {
                           },
                           mimeType: {
                             type: "string",
-                            const: "application/vnd.dust.configuration.table",
+                            const: "application/vnd.dust.tool-input.table",
                           },
                         },
                         required: ["uri", "mimeType"],
@@ -163,13 +161,13 @@ describe("JSON Schema Utilities", () => {
       };
 
       // Look for TABLE configuration schema
-      const targetSchema =
-        ConfigurableToolInputJSONSchemas[
-          INTERNAL_MIME_TYPES.CONFIGURATION.TABLE
-        ];
-
-      const result = findMatchingSchemaKeys(mainSchema, targetSchema);
-      expect(result).toContain("dataSourceConfigs.items.settings.tables");
+      const result = findMatchingSubSchemas(
+        mainSchema,
+        INTERNAL_MIME_TYPES.TOOL_INPUT.TABLE
+      );
+      expect(Object.keys(result)).toContain(
+        "dataSourceConfigs.items.settings.tables"
+      );
     });
 
     it("should handle complex nested schemas with CHILD_AGENT configuration", () => {
@@ -199,7 +197,7 @@ describe("JSON Schema Utilities", () => {
                             mimeType: {
                               type: "string",
                               const:
-                                "application/vnd.dust.configuration.child-agent",
+                                "application/vnd.dust.tool-input.child-agent",
                             },
                           },
                           required: ["uri", "mimeType"],
@@ -217,13 +215,47 @@ describe("JSON Schema Utilities", () => {
       };
 
       // Look for CHILD_AGENT configuration schema
-      const targetSchema =
-        ConfigurableToolInputJSONSchemas[
-          INTERNAL_MIME_TYPES.CONFIGURATION.CHILD_AGENT
-        ];
+      const result = findMatchingSubSchemas(
+        mainSchema,
+        INTERNAL_MIME_TYPES.TOOL_INPUT.CHILD_AGENT
+      );
+      expect(Object.keys(result)).toContain(
+        "workflow.steps.items.action.executor"
+      );
+    });
 
-      const result = findMatchingSchemaKeys(mainSchema, targetSchema);
-      expect(result).toContain("workflow.steps.items.action.executor");
+    it("should not match other things when schema is nullable", () => {
+      const mainSchema: JSONSchema = {
+        type: "object",
+        properties: {
+          requiredString: {
+            type: "object",
+            properties: {
+              value: {
+                type: "string",
+              },
+              mimeType: {
+                type: "string",
+                const: "application/vnd.dust.tool-input.string",
+              },
+            },
+            required: ["value", "mimeType"],
+            additionalProperties: false,
+            $schema: "http://json-schema.org/draft-07/schema#",
+          },
+          optionalTimeFrame:
+            ConfigurableToolInputJSONSchemas[
+              INTERNAL_MIME_TYPES.TOOL_INPUT.NULLABLE_TIME_FRAME
+            ],
+        },
+        required: ["optionalString"],
+      };
+
+      const r = findMatchingSubSchemas(
+        mainSchema,
+        INTERNAL_MIME_TYPES.TOOL_INPUT.NULLABLE_TIME_FRAME
+      );
+      expect(Object.keys(r)).toStrictEqual(["optionalTimeFrame"]);
     });
   });
 });

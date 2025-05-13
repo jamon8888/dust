@@ -1,24 +1,25 @@
 import { ContentMessage, InformationCircleIcon } from "@dust-tt/sparkle";
-import React, { useCallback, useContext, useMemo, useState } from "react";
+import { useCallback, useContext, useMemo, useState } from "react";
 
 import { AdditionalConfigurationSection } from "@app/components/assistant_builder/actions/configuration/AdditionalConfigurationSection";
 import AssistantBuilderDataSourceModal from "@app/components/assistant_builder/actions/configuration/AssistantBuilderDataSourceModal";
 import { ChildAgentConfigurationSection } from "@app/components/assistant_builder/actions/configuration/ChildAgentConfigurationSection";
 import DataSourceSelectionSection from "@app/components/assistant_builder/actions/configuration/DataSourceSelectionSection";
+import { DustAppConfigurationSection } from "@app/components/assistant_builder/actions/configuration/DustAppConfigurationSection";
+import { ReasoningModelConfigurationSection } from "@app/components/assistant_builder/actions/configuration/ReasoningModelConfigurationSection";
+import { TimeFrameConfigurationSection } from "@app/components/assistant_builder/actions/configuration/TimeFrameConfigurationSection";
+import { MCPToolsList } from "@app/components/assistant_builder/actions/MCPToolsList";
 import { AssistantBuilderContext } from "@app/components/assistant_builder/AssistantBuilderContext";
 import { MCPServerSelector } from "@app/components/assistant_builder/MCPServerSelector";
 import type {
   AssistantBuilderActionConfiguration,
   AssistantBuilderMCPServerConfiguration,
 } from "@app/components/assistant_builder/types";
-import { getMCPServerRequirements } from "@app/lib/actions/mcp_internal_actions/input_schemas";
+import type { MCPServerAvailability } from "@app/lib/actions/mcp_internal_actions/constants";
+import { getMCPServerRequirements } from "@app/lib/actions/mcp_internal_actions/utils";
 import type { MCPServerViewType } from "@app/lib/api/mcp";
-import type {
-  DataSourceViewSelectionConfigurations,
-  LightWorkspaceType,
-  SpaceType,
-} from "@app/types";
-import { assertNever, slugify } from "@app/types";
+import type { LightWorkspaceType, SpaceType, TimeFrame } from "@app/types";
+import { asDisplayName, assertNever, slugify } from "@app/types";
 
 interface NoActionAvailableProps {
   owner: LightWorkspaceType;
@@ -27,7 +28,7 @@ interface NoActionAvailableProps {
 function NoActionAvailable({ owner }: NoActionAvailableProps) {
   return (
     <ContentMessage
-      title="You don't have any Actions available"
+      title="You don't have any Tools available"
       icon={InformationCircleIcon}
       variant="warning"
     >
@@ -38,8 +39,8 @@ function NoActionAvailable({ owner }: NoActionAvailableProps) {
               return (
                 <div>
                   <strong>
-                    Visit the "Tools" section in the Knowledge panel to add a
-                    Toolset.
+                    Visit the "Tools" section in the Knowledge panel to add
+                    Tools.
                   </strong>
                 </div>
               );
@@ -47,7 +48,7 @@ function NoActionAvailable({ owner }: NoActionAvailableProps) {
             case "user":
               return (
                 <div>
-                  <strong>Ask your Admins to add a Toolset.</strong>
+                  <strong>Ask your Admins to add Tools.</strong>
                 </div>
               );
             case "none":
@@ -65,6 +66,7 @@ interface MCPActionProps {
   owner: LightWorkspaceType;
   allowedSpaces: SpaceType[];
   action: AssistantBuilderActionConfiguration;
+  isEditing: boolean;
   updateAction: (args: {
     actionName: string;
     actionDescription: string;
@@ -79,6 +81,7 @@ export function MCPAction({
   owner,
   allowedSpaces,
   action,
+  isEditing,
   updateAction,
   setEdited,
 }: MCPActionProps) {
@@ -98,8 +101,8 @@ export function MCPAction({
     );
 
   // MCPServerView on default MCP server will not allow switching to another one.
-  const isDefaultMCPServer = useMemo(
-    () => !!selectedMCPServerView?.server.isDefault,
+  const selectedServerAvailability: MCPServerAvailability | null = useMemo(
+    () => selectedMCPServerView?.server.availability ?? null,
     [selectedMCPServerView]
   );
 
@@ -124,84 +127,34 @@ export function MCPAction({
           dataSourceConfigurations: null,
           tablesConfigurations: null,
           childAgentId: null,
-          // We initialize with the default values for required booleans since these can be left unset.
-          additionalConfiguration: requirements.requiredBooleans,
+          reasoningModel: null,
+          timeFrame: null,
+          // We initialize boolean with false because leaving them unset means false (toggle on the left).
+          additionalConfiguration: Object.fromEntries(
+            requirements.requiredBooleans.map((key) => [key, false])
+          ),
+          dustAppConfiguration: null,
         }),
       });
     },
     [setEdited, updateAction]
   );
 
-  const handleDataSourceConfigUpdate = useCallback(
-    (dsConfigs: DataSourceViewSelectionConfigurations) => {
+  const handleConfigUpdate = useCallback(
+    (
+      getNewConfig: (
+        old: AssistantBuilderMCPServerConfiguration
+      ) => AssistantBuilderMCPServerConfiguration
+    ) => {
       setEdited(true);
       updateAction({
         actionName: action.name,
         actionDescription: action.description,
-        getNewActionConfig: (old) => ({
-          ...(old as AssistantBuilderMCPServerConfiguration),
-          dataSourceConfigurations: dsConfigs,
-        }),
+        getNewActionConfig: (old) =>
+          getNewConfig(old as AssistantBuilderMCPServerConfiguration),
       });
     },
     [action.description, action.name, setEdited, updateAction]
-  );
-
-  const handleTableConfigUpdate = useCallback(
-    (tableConfigs: DataSourceViewSelectionConfigurations) => {
-      setEdited(true);
-
-      updateAction({
-        actionName: action.name,
-        actionDescription: action.description,
-        getNewActionConfig: (old) => ({
-          ...(old as AssistantBuilderMCPServerConfiguration),
-          tablesConfigurations: tableConfigs,
-        }),
-      });
-    },
-    [action.description, action.name, setEdited, updateAction]
-  );
-
-  const handleChildAgentConfigUpdate = useCallback(
-    (newChildAgentId: string) => {
-      setEdited(true);
-
-      updateAction({
-        actionName: action.name,
-        actionDescription: action.description,
-        getNewActionConfig: (old) => ({
-          ...(old as AssistantBuilderMCPServerConfiguration),
-          childAgentId: newChildAgentId,
-        }),
-      });
-    },
-    [action.description, action.name, setEdited, updateAction]
-  );
-
-  const handleAdditionalConfigUpdate = useCallback(
-    (key: string, value: string | number | boolean) => {
-      if (!selectedMCPServerView) {
-        return;
-      }
-      setEdited(true);
-      updateAction({
-        actionName: slugify(selectedMCPServerView?.server.name ?? ""),
-        actionDescription: selectedMCPServerView?.server.description ?? "",
-        getNewActionConfig: (prev) => {
-          const prevConfig = prev as AssistantBuilderMCPServerConfiguration;
-          return {
-            ...prevConfig,
-            mcpServerViewId: selectedMCPServerView.id,
-            additionalConfiguration: {
-              ...prevConfig.additionalConfiguration,
-              [key]: value,
-            },
-          };
-        },
-      });
-    },
-    [selectedMCPServerView, setEdited, updateAction]
   );
 
   if (action.type !== "MCP") {
@@ -222,7 +175,9 @@ export function MCPAction({
           isOpen={showDataSourcesModal}
           setOpen={setShowDataSourcesModal}
           owner={owner}
-          onSave={handleDataSourceConfigUpdate}
+          onSave={(dataSourceConfigurations) => {
+            handleConfigUpdate((old) => ({ ...old, dataSourceConfigurations }));
+          }}
           initialDataSourceConfigurations={
             actionConfiguration.dataSourceConfigurations ?? {}
           }
@@ -237,7 +192,9 @@ export function MCPAction({
             setShowTablesModal(isOpen);
           }}
           owner={owner}
-          onSave={handleTableConfigUpdate}
+          onSave={(tablesConfigurations) => {
+            handleConfigUpdate((old) => ({ ...old, tablesConfigurations }));
+          }}
           initialDataSourceConfigurations={
             actionConfiguration.tablesConfigurations ?? {}
           }
@@ -246,19 +203,41 @@ export function MCPAction({
         />
       )}
       {/* Server selection */}
-      {isDefaultMCPServer ? (
-        <div className="text-sm text-foreground dark:text-foreground-night">
-          {selectedMCPServerView?.server.description}
-        </div>
-      ) : (
-        <MCPServerSelector
-          owner={owner}
-          allowedSpaces={allowedSpaces}
-          mcpServerViews={mcpServerViews}
-          selectedMCPServerView={selectedMCPServerView}
-          handleServerSelection={handleServerSelection}
-        />
-      )}
+      {(selectedServerAvailability === null ||
+        selectedServerAvailability === "manual") &&
+        (isEditing ? (
+          <div className="text-sm text-foreground dark:text-foreground-night">
+            <div>{selectedMCPServerView?.server.description}</div>
+            <br />
+            {selectedServerAvailability === "manual" && (
+              <div>
+                Available to you via{" "}
+                <b>
+                  {
+                    allowedSpaces.find(
+                      (space) => space.sId === selectedMCPServerView?.spaceId
+                    )?.name
+                  }
+                </b>{" "}
+                space.
+              </div>
+            )}
+
+            {selectedMCPServerView && (
+              <MCPToolsList tools={selectedMCPServerView.server.tools} />
+            )}
+          </div>
+        ) : (
+          <>
+            <MCPServerSelector
+              owner={owner}
+              allowedSpaces={allowedSpaces}
+              mcpServerViews={mcpServerViews}
+              selectedMCPServerView={selectedMCPServerView}
+              handleServerSelection={handleServerSelection}
+            />
+          </>
+        ))}
       {/* Configurable blocks */}
       {requirements.requiresDataSourceConfiguration && (
         <DataSourceSelectionSection
@@ -267,7 +246,9 @@ export function MCPAction({
             actionConfiguration.dataSourceConfigurations ?? {}
           }
           openDataSourceModal={() => setShowDataSourcesModal(true)}
-          onSave={handleDataSourceConfigUpdate}
+          onSave={(dataSourceConfigurations) => {
+            handleConfigUpdate((old) => ({ ...old, dataSourceConfigurations }));
+          }}
           viewType="document"
         />
       )}
@@ -278,23 +259,63 @@ export function MCPAction({
             actionConfiguration.tablesConfigurations ?? {}
           }
           openDataSourceModal={() => setShowTablesModal(true)}
-          onSave={handleTableConfigUpdate}
+          onSave={(tablesConfigurations) => {
+            handleConfigUpdate((old) => ({ ...old, tablesConfigurations }));
+          }}
           viewType="table"
         />
       )}
       {requirements.requiresChildAgentConfiguration && (
         <ChildAgentConfigurationSection
-          onAgentSelect={handleChildAgentConfigUpdate}
+          onAgentSelect={(childAgentId) => {
+            handleConfigUpdate((old) => ({ ...old, childAgentId }));
+          }}
           selectedAgentId={actionConfiguration.childAgentId}
           owner={owner}
         />
       )}
+      {requirements.requiresReasoningConfiguration && (
+        <ReasoningModelConfigurationSection
+          onModelSelect={(reasoningModel) => {
+            handleConfigUpdate((old) => ({ ...old, reasoningModel }));
+          }}
+          selectedReasoningModel={actionConfiguration.reasoningModel}
+          owner={owner}
+        />
+      )}
+      {requirements.requiredDustAppConfiguration && (
+        <DustAppConfigurationSection
+          owner={owner}
+          allowedSpaces={allowedSpaces}
+          selectedConfig={actionConfiguration.dustAppConfiguration}
+          onConfigSelect={(dustAppConfig) => {
+            handleConfigUpdate((old) => ({
+              ...old,
+              dustAppConfiguration: dustAppConfig,
+            }));
+          }}
+        />
+      )}
+      {requirements.mayRequiresTimeFrameConfiguration && (
+        <TimeFrameConfigurationSection
+          onConfigUpdate={(timeFrame: TimeFrame | null) => {
+            handleConfigUpdate((old) => ({ ...old, timeFrame }));
+          }}
+          timeFrame={actionConfiguration.timeFrame}
+        />
+      )}
       <AdditionalConfigurationSection
-        requiredStrings={requirements.requiredStrings}
-        requiredNumbers={requirements.requiredNumbers}
-        requiredBooleans={requirements.requiredBooleans}
+        {...requirements}
         additionalConfiguration={actionConfiguration.additionalConfiguration}
-        onConfigUpdate={handleAdditionalConfigUpdate}
+        onConfigUpdate={(key, value) => {
+          handleConfigUpdate((old) => ({
+            ...old,
+            additionalConfiguration: {
+              ...old.additionalConfiguration,
+              [key]: value,
+            },
+          }));
+        }}
       />
     </>
   );
@@ -318,13 +339,13 @@ export function hasErrorActionMCP(
       requirements.requiresDataSourceConfiguration &&
       !action.configuration.dataSourceConfigurations
     ) {
-      return "Please select data source(s).";
+      return "Please select one or multiple data sources.";
     }
     if (
       requirements.requiresTableConfiguration &&
       !action.configuration.tablesConfigurations
     ) {
-      return "Please select table(s).";
+      return "Please select one or multiple tables.";
     }
     if (
       requirements.requiresChildAgentConfiguration &&
@@ -332,15 +353,31 @@ export function hasErrorActionMCP(
     ) {
       return "Please select a child agent.";
     }
-    for (const key in requirements.requiredStrings) {
+    if (
+      requirements.requiresReasoningConfiguration &&
+      !action.configuration.reasoningModel
+    ) {
+      return "Please select a reasoning model.";
+    }
+
+    const missingFields = [];
+    for (const key of requirements.requiredStrings) {
       if (!(key in action.configuration.additionalConfiguration)) {
-        return `Please fill in all fields.`;
+        missingFields.push(key);
       }
     }
-    for (const key in requirements.requiredNumbers) {
+    for (const key of requirements.requiredNumbers) {
       if (!(key in action.configuration.additionalConfiguration)) {
-        return `Please fill in all required numeric fields.`;
+        missingFields.push(key);
       }
+    }
+    for (const key in requirements.requiredEnums) {
+      if (!(key in action.configuration.additionalConfiguration)) {
+        missingFields.push(key);
+      }
+    }
+    if (missingFields.length > 0) {
+      return `Some fields are missing: ${missingFields.map(asDisplayName).join(", ")}.`;
     }
 
     return null;

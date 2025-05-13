@@ -1,4 +1,9 @@
 import type {
+  ClientSideMCPServerConfigurationType,
+  MCPServerConfigurationType,
+  MCPToolConfigurationType,
+} from "@app/lib/actions/mcp";
+import type {
   ActionConfigurationType,
   AgentActionSpecification,
 } from "@app/lib/actions/types/agent";
@@ -97,7 +102,6 @@ export interface BaseActionConfigurationStaticMethods<
 
 export interface BaseActionRunParams {
   agentConfiguration: AgentConfigurationType;
-  actionConfiguration: ActionConfigurationType;
   conversation: ConversationType;
   agentMessage: AgentMessageType;
   rawInputs: Record<string, unknown>;
@@ -133,3 +137,22 @@ export abstract class BaseActionConfigurationServerRunner<
     customParams: Record<string, unknown>
   ): AsyncGenerator<unknown>;
 }
+
+export type AgentLoopRunContextType = {
+  agentConfiguration: AgentConfigurationType;
+  actionConfiguration: MCPToolConfigurationType;
+  clientSideActionConfigurations?: ClientSideMCPServerConfigurationType[];
+  conversation: ConversationType;
+  agentMessage: AgentMessageType;
+  stepActionIndex: number;
+  stepActions: ActionConfigurationType[];
+  citationsRefsOffset: number;
+};
+
+export type AgentLoopListToolsContextType = {
+  agentConfiguration: AgentConfigurationType;
+  agentActionConfiguration: MCPServerConfigurationType;
+  clientSideActionConfigurations?: ClientSideMCPServerConfigurationType[];
+  conversation: ConversationType;
+  agentMessage: AgentMessageType;
+};

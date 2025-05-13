@@ -38,7 +38,6 @@ interface ConversationContainerProps {
   owner: WorkspaceType;
   subscription: SubscriptionType;
   user: UserType;
-  isBuilder: boolean;
   agentIdToMention: string | null;
 }
 
@@ -46,7 +45,6 @@ export function ConversationContainer({
   owner,
   subscription,
   user,
-  isBuilder,
   agentIdToMention,
 }: ConversationContainerProps) {
   const { activeConversationId } = useConversationsNavigation();
@@ -116,7 +114,7 @@ export function ConversationContainer({
       input,
       mentions,
       contentFragments,
-      localMCPServerIds: removeNulls([serverId]),
+      clientSideMCPServerIds: removeNulls([serverId]),
     };
 
     try {
@@ -217,7 +215,7 @@ export function ConversationContainer({
           input,
           mentions,
           contentFragments,
-          localMCPServerIds: removeNulls([serverId]),
+          clientSideMCPServerIds: removeNulls([serverId]),
         },
       });
 
@@ -345,7 +343,6 @@ export function ConversationContainer({
             assistantToMention.current = assistant;
           }}
           owner={owner}
-          isBuilder={isBuilder}
         />
       )}
 

@@ -15,7 +15,7 @@ import {
   AgentMessageContentParser,
   getDelimitersConfiguration,
 } from "@app/lib/api/assistant/agent_message_content_parser";
-import { getAgentConfiguration } from "@app/lib/api/assistant/configuration";
+import { getAgentConfigurations } from "@app/lib/api/assistant/configuration";
 import type { PaginationParams } from "@app/lib/api/pagination";
 import { Authenticator } from "@app/lib/auth";
 import { AgentMessageContent } from "@app/lib/models/assistant/agent_message_content";
@@ -43,26 +43,31 @@ import type {
 import { ConversationError, Err, Ok, removeNulls } from "@app/types";
 
 async function batchRenderUserMessages(
+  auth: Authenticator,
   messages: Message[]
 ): Promise<{ m: UserMessageType; rank: number; version: number }[]> {
   const userMessages = messages.filter(
     (m) => m.userMessage !== null && m.userMessage !== undefined
   );
+
+  const userIds = [
+    ...new Set(
+      userMessages
+        .map((m) => m.userMessage?.userId)
+        .filter((id) => !!id) as number[]
+    ),
+  ];
+
   const [mentions, users] = await Promise.all([
     Mention.findAll({
       where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
         messageId: userMessages.map((m) => m.id),
       },
     }),
-    (async () => {
-      const userIds = userMessages
-        .map((m) => m.userMessage?.userId)
-        .filter((id) => !!id) as number[];
-      if (userIds.length === 0) {
-        return [];
-      }
-      return UserResource.fetchByModelIds(userIds);
-    })(),
+    userIds.length === 0
+      ? []
+      : UserResource.fetchByModelIds([...new Set(userIds)]),
   ]);
 
   return userMessages.map((message) => {
@@ -83,14 +88,16 @@ async function batchRenderUserMessages(
       version: message.version,
       created: message.createdAt.getTime(),
       user: user ? user.toJSON() : null,
-      mentions: messageMentions.map((m) => {
-        if (m.agentConfigurationId) {
-          return {
-            configurationId: m.agentConfigurationId,
-          };
-        }
-        throw new Error("Mention Must Be An Agent: Unreachable.");
-      }),
+      mentions: messageMentions
+        ? messageMentions.map((m) => {
+            if (m.agentConfigurationId) {
+              return {
+                configurationId: m.agentConfigurationId,
+              };
+            }
+            throw new Error("Mention Must Be An Agent: Unreachable.");
+          })
+        : [],
       content: userMessage.content,
       context: {
         username: userMessage.userContextUsername,
@@ -132,21 +139,21 @@ async function batchRenderAgentMessages(
     agentMCPActions,
   ] = await Promise.all([
     (async () => {
-      const agentConfigurationIds: string[] = agentMessages.reduce(
-        (acc: string[], m) => {
+      const agentConfigurationIds: Set<string> = agentMessages.reduce(
+        (acc: Set<string>, m) => {
           const agentId = m.agentMessage?.agentConfigurationId;
-          if (agentId && !acc.includes(agentId)) {
-            acc.push(agentId);
+          if (agentId) {
+            acc.add(agentId);
           }
           return acc;
         },
-        []
+        new Set<string>()
       );
-      const agents = await Promise.all(
-        agentConfigurationIds.map((agentConfigId) => {
-          return getAgentConfiguration(auth, agentConfigId, "light");
-        })
-      );
+      const agents = await getAgentConfigurations({
+        auth,
+        agentsGetView: { agentIds: [...agentConfigurationIds] },
+        variant: "extra_light",
+      });
       if (agents.some((a) => !a)) {
         return null;
       }
@@ -156,14 +163,18 @@ async function batchRenderAgentMessages(
       retrievalActionTypesFromAgentMessageIds(auth, agentMessageIds))(),
     (async () => dustAppRunTypesFromAgentMessageIds(auth, agentMessageIds))(),
     (async () => tableQueryTypesFromAgentMessageIds(auth, agentMessageIds))(),
-    (async () => processActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      processActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
     (async () => websearchActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => browseActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      browseActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
     (async () =>
       conversationIncludeFileTypesFromAgentMessageIds(agentMessageIds))(),
     (async () => reasoningActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => searchLabelsActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => mcpActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      searchLabelsActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
+    (async () =>
+      mcpActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
   ]);
 
   if (!agentConfigurations) {
@@ -306,6 +317,7 @@ async function batchRenderContentFragment(
  * because there's no easy way to fetch only the latest version of a message.
  */
 async function getMaxRankMessages(
+  auth: Authenticator,
   conversation: ConversationResource,
   paginationParams: PaginationParams
 ): Promise<ModelId[]> {
@@ -313,6 +325,7 @@ async function getMaxRankMessages(
 
   const where: WhereOptions<Message> = {
     conversationId: conversation.id,
+    workspaceId: auth.getNonNullableWorkspace().id,
   };
 
   if (lastValue) {
@@ -340,12 +353,17 @@ async function getMaxRankMessages(
 }
 
 async function fetchMessagesForPage(
+  auth: Authenticator,
   conversation: ConversationResource,
   paginationParams: PaginationParams
 ): Promise<{ hasMore: boolean; messages: Message[] }> {
   const { orderColumn, orderDirection, limit } = paginationParams;
 
-  const messageIds = await getMaxRankMessages(conversation, paginationParams);
+  const messageIds = await getMaxRankMessages(
+    auth,
+    conversation,
+    paginationParams
+  );
 
   const hasMore = messageIds.length > limit;
   const relevantMessageIds = hasMore ? messageIds.slice(0, limit) : messageIds;
@@ -354,6 +372,7 @@ async function fetchMessagesForPage(
   const messages = await Message.findAll({
     where: {
       conversationId: conversation.id,
+      workspaceId: auth.getNonNullableWorkspace().id,
       id: {
         [Op.in]: relevantMessageIds,
       },
@@ -400,7 +419,7 @@ export async function batchRenderMessages(
   messages: Message[]
 ): Promise<Result<MessageWithRankType[], ConversationError>> {
   const [userMessages, agentMessagesRes, contentFragments] = await Promise.all([
-    batchRenderUserMessages(messages),
+    batchRenderUserMessages(auth, messages),
     batchRenderAgentMessages(auth, messages),
     batchRenderContentFragment(auth, conversationId, messages),
   ]);
@@ -448,6 +467,7 @@ export async function fetchConversationMessages(
   }
 
   const { hasMore, messages } = await fetchMessagesForPage(
+    auth,
     conversation,
     paginationParams
   );

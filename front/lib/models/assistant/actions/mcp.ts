@@ -1,13 +1,15 @@
 import type { CreationOptional, ForeignKey, NonAttribute } from "sequelize";
 import { DataTypes } from "sequelize";
 
-import type { MCPToolResultContent } from "@app/lib/actions/mcp_actions";
+import type { MCPToolResultContentType } from "@app/lib/actions/mcp_internal_actions/output_schemas";
 import { MCPServerViewModel } from "@app/lib/models/assistant/actions/mcp_server_view";
 import { AgentConfiguration } from "@app/lib/models/assistant/agent";
 import { AgentMessage } from "@app/lib/models/assistant/conversation";
 import { frontSequelize } from "@app/lib/resources/storage";
 import { FileModel } from "@app/lib/resources/storage/models/files";
 import { WorkspaceAwareModel } from "@app/lib/resources/storage/wrappers/workspace_models";
+import type { TimeFrame } from "@app/types";
+import { isTimeFrame } from "@app/types";
 
 export class AgentMCPServerConfiguration extends WorkspaceAwareModel<AgentMCPServerConfiguration> {
   declare createdAt: CreationOptional<Date>;
@@ -17,14 +19,24 @@ export class AgentMCPServerConfiguration extends WorkspaceAwareModel<AgentMCPSer
 
   declare sId: string;
 
+  declare timeFrame: TimeFrame | null;
   declare additionalConfiguration: Record<string, boolean | number | string>;
 
+  declare appId: string | null;
+
   declare mcpServerViewId: ForeignKey<MCPServerViewModel["id"]>;
+  declare mcpServerView: NonAttribute<MCPServerViewModel>;
+
+  // Hold the SID of the MCP server if it's an internal one, as a convenience to avoid
+  // having to fetch the MCP server view when we need to identify the internal MCP server.
+  declare internalMCPServerId: string | null;
 
   declare name: string | null;
 
-  // This is a temporary override for the tool description when we only have one tool
+  // This is a temporary override for the tool description when we have tools using datasources or tables
   // to keep backward compatibility with the previous action behavior (like retrieval).
+  // It allows us to show the datasource description to the model.
+  // Note: singleToolDescriptionOverride is wrong, it should be toolsExtraDescription or something like that.
   declare singleToolDescriptionOverride: string | null;
 }
 
@@ -43,6 +55,20 @@ AgentMCPServerConfiguration.init(
     sId: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    timeFrame: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      validate: {
+        isValidTimeFrame(value: unknown) {
+          if (value === null) {
+            return;
+          }
+          if (!isTimeFrame(value)) {
+            throw new Error("Invalid time frame");
+          }
+        },
+      },
     },
     additionalConfiguration: {
       type: DataTypes.JSONB,
@@ -67,6 +93,10 @@ AgentMCPServerConfiguration.init(
         },
       },
     },
+    appId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     mcpServerViewId: {
       type: DataTypes.BIGINT,
       allowNull: false,
@@ -74,6 +104,10 @@ AgentMCPServerConfiguration.init(
         model: MCPServerViewModel,
         key: "id",
       },
+    },
+    internalMCPServerId: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     name: {
       type: DataTypes.STRING,
@@ -114,6 +148,7 @@ MCPServerViewModel.hasMany(AgentMCPServerConfiguration, {
 });
 AgentMCPServerConfiguration.belongsTo(MCPServerViewModel, {
   foreignKey: { name: "mcpServerViewId", allowNull: false },
+  as: "mcpServerView",
 });
 
 export class AgentMCPAction extends WorkspaceAwareModel<AgentMCPAction> {
@@ -198,8 +233,13 @@ AgentMCPAction.init(
     modelName: "agent_mcp_action",
     sequelize: frontSequelize,
     indexes: [
+      // TODO(WORKSPACE_ID_ISOLATION 2025-05-12): Remove index
       {
         fields: ["agentMessageId"],
+        concurrently: true,
+      },
+      {
+        fields: ["workspaceId", "agentMessageId"],
         concurrently: true,
       },
     ],
@@ -219,7 +259,7 @@ export class AgentMCPActionOutputItem extends WorkspaceAwareModel<AgentMCPAction
   declare updatedAt: CreationOptional<Date>;
 
   declare agentMCPActionId: ForeignKey<AgentMCPAction["id"]>;
-  declare content: MCPToolResultContent;
+  declare content: MCPToolResultContentType;
   declare fileId: ForeignKey<FileModel["id"]> | null;
 
   declare file: NonAttribute<FileModel>;

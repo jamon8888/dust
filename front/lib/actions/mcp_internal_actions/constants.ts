@@ -8,23 +8,39 @@ export const AVAILABLE_INTERNAL_MCP_SERVER_NAMES = [
   // Names should reflect the purpose of the server, but not directly the tools it contains.
   // We'll prefix all tools with the server name to avoid conflicts.
   // It's okay to change the name of the server as we don't refer to it directly.
-  "image_generator",
-  "file_generator",
+  "agent_router",
+  "ask_agent",
+  "file_generation",
   "github",
-  "data_sources_debugger",
-  "authentication_debugger",
-  "tables_debugger",
-  "child_agent_debugger",
+  "hubspot",
+  "image_generation",
+  "include_data",
+  "notion",
   "primitive_types_debugger",
-  "web_search_&_browse",
+  "query_tables",
+  "reasoning_v2",
+  "run_dust_app",
+  "search",
+  "think",
+  "web_search_&_browse_v2",
 ] as const;
+
+// Whether the server is available by default in the global space.
+// Hidden servers are available by default in the global space but are not visible in the assistant builder.
+const MCP_SERVER_AVAILABILITY = [
+  "manual",
+  "auto",
+  "auto_hidden_builder",
+] as const;
+export type MCPServerAvailability = (typeof MCP_SERVER_AVAILABILITY)[number];
 
 export const INTERNAL_MCP_SERVERS: Record<
   InternalMCPServerNameType,
   {
     id: number;
-    isDefault: boolean;
+    availability: MCPServerAvailability;
     flag: WhitelistableFeature | null;
+    tools_stakes?: Record<string, MCPToolStakeLevelType>;
   }
 > = {
   // Notes:
@@ -36,76 +52,119 @@ export const INTERNAL_MCP_SERVERS: Record<
   // Production
   github: {
     id: 1,
-    isDefault: false,
+    availability: "manual",
     flag: "mcp_actions",
+    tools_stakes: {
+      get_pull_request: "never_ask",
+    },
   },
-  image_generator: {
+  image_generation: {
     id: 2,
-    isDefault: true,
+    availability: "auto",
+    flag: null,
+  },
+  file_generation: {
+    id: 3,
+    availability: "auto",
     flag: "mcp_actions",
   },
-  file_generator: {
-    id: 3,
-    isDefault: true,
+  query_tables: {
+    id: 4,
+    availability: "auto",
+    flag: "dev_mcp_actions", // Putting this behind the dev flag for now to allow shipping without it.
+  },
+  "web_search_&_browse_v2": {
+    id: 5,
+    availability: "auto",
     flag: "mcp_actions",
+  },
+  think: {
+    id: 6,
+    availability: "auto",
+    flag: "dev_mcp_actions",
+  },
+  hubspot: {
+    id: 7,
+    availability: "manual",
+    flag: "dev_mcp_actions",
+    tools_stakes: {
+      get_object_properties: "never_ask",
+      get_objects_by_properties: "low",
+      get_object_by_email: "low",
+      get_object_by_id: "low",
+      count_objects_by_properties: "low",
+      create_object: "high",
+      update_object: "high",
+    },
+  },
+  agent_router: {
+    id: 8,
+    availability: "auto_hidden_builder",
+    flag: "dev_mcp_actions",
+  },
+  include_data: {
+    id: 9,
+    availability: "auto",
+    flag: "dev_mcp_actions", // Putting this behind the dev flag for now to allow shipping without it.
+  },
+  run_dust_app: {
+    id: 10,
+    availability: "auto",
+    flag: "dev_mcp_actions",
+  },
+  notion: {
+    id: 11,
+    availability: "manual",
+    flag: "dev_mcp_actions",
+    tools_stakes: {
+      retrieve_database_content: "never_ask",
+      query_database: "never_ask",
+      retrieve_page: "never_ask",
+      retrieve_database_schema: "never_ask",
+      search: "never_ask",
+    },
   },
 
   // Dev
-  data_sources_debugger: {
-    id: 1000,
-    isDefault: true,
-    flag: "dev_mcp_actions",
-  },
-  child_agent_debugger: {
-    id: 1001,
-    isDefault: false,
-    flag: "dev_mcp_actions",
-  },
-  authentication_debugger: {
-    id: 1002,
-    isDefault: false,
-    flag: "dev_mcp_actions",
-  },
-  tables_debugger: {
-    id: 1003,
-    isDefault: false,
-    flag: "dev_mcp_actions",
-  },
   primitive_types_debugger: {
     id: 1004,
-    isDefault: false,
+    availability: "manual",
     flag: "dev_mcp_actions",
   },
-  "web_search_&_browse": {
-    id: 1005,
-    isDefault: true,
+  search: {
+    id: 1006,
+    availability: "auto",
     flag: "dev_mcp_actions",
   },
-};
-
-export const INTERNAL_TOOLS_STAKE_LEVEL: Partial<
-  Record<InternalMCPServerNameType, Record<string, MCPToolStakeLevelType>>
-> = {
-  authentication_debugger: {
-    hello_world: "low",
+  reasoning_v2: {
+    id: 1007,
+    availability: "auto",
+    flag: "dev_mcp_actions",
+  },
+  ask_agent: {
+    id: 1008,
+    availability: "manual",
+    flag: "dev_mcp_actions",
   },
 };
 
 export type InternalMCPServerNameType =
   (typeof AVAILABLE_INTERNAL_MCP_SERVER_NAMES)[number];
 
-export const isDefaultInternalMCPServerByName = (
+export const getAvailabilityOfInternalMCPServerByName = (
   name: InternalMCPServerNameType
-): boolean => {
-  return INTERNAL_MCP_SERVERS[name].isDefault;
+): MCPServerAvailability => {
+  return INTERNAL_MCP_SERVERS[name].availability;
 };
 
-export const isDefaultInternalMCPServer = (sId: string): boolean => {
+export const getInternalMCPServerAvailability = (
+  sId: string
+): MCPServerAvailability => {
   const r = getInternalMCPServerNameAndWorkspaceId(sId);
   if (r.isErr()) {
-    return false;
+    return "manual";
   }
-  return isDefaultInternalMCPServerByName(r.value.name);
+  return getAvailabilityOfInternalMCPServerByName(r.value.name);
 };
 
 export const getInternalMCPServerNameAndWorkspaceId = (
@@ -113,7 +172,7 @@ export const getInternalMCPServerNameAndWorkspaceId = (
 ): Result<
   {
     name: InternalMCPServerNameType;
-    workspaceId: ModelId;
+    workspaceModelId: ModelId;
   },
   Error
 > => {
@@ -133,7 +192,7 @@ export const getInternalMCPServerNameAndWorkspaceId = (
 
   // Swap keys and values.
   const details = Object.entries(INTERNAL_MCP_SERVERS).find(
-    ([, internalMCPServer]) => internalMCPServer.id === sIdParts.resourceId
+    ([, internalMCPServer]) => internalMCPServer.id === sIdParts.resourceModelId
   );
 
   if (!details) {
@@ -154,7 +213,7 @@ export const getInternalMCPServerNameAndWorkspaceId = (
 
   return new Ok({
     name,
-    workspaceId: sIdParts.workspaceId,
+    workspaceModelId: sIdParts.workspaceModelId,
   });
 };
 
@@ -166,12 +225,28 @@ export const isInternalMCPServerName = (
   );
 
 export const isValidInternalMCPServerId = (
-  workspaceId: ModelId,
+  workspaceModelId: ModelId,
   sId: string
 ): boolean => {
   const r = getInternalMCPServerNameAndWorkspaceId(sId);
   if (r.isOk()) {
-    return r.value.workspaceId === workspaceId;
+    return r.value.workspaceModelId === workspaceModelId;
+  }
+
+  return false;
+};
+
+export const isInternalMCPServerOfName = (
+  sId: string | null,
+  name: InternalMCPServerNameType
+): boolean => {
+  if (sId === null) {
+    return false;
+  }
+
+  const r = getInternalMCPServerNameAndWorkspaceId(sId);
+  if (r.isOk()) {
+    return r.value.name === name;
   }
 
   return false;

@@ -4,18 +4,22 @@ import type { Transaction } from "sequelize";
 import { runActionStreamed } from "@app/lib/actions/server";
 import type { AgentActionSpecificEvent } from "@app/lib/actions/types/agent";
 import { runAgent } from "@app/lib/api/assistant/agent";
-import { signalAgentUsage } from "@app/lib/api/assistant/agent_usage";
+import type { AgentUsageCount } from "@app/lib/api/assistant/agent_usage";
+import {
+  getAgentsUsage,
+  signalAgentUsage,
+} from "@app/lib/api/assistant/agent_usage";
 import {
   getAgentConfigurations,
   getLightAgentConfiguration,
 } from "@app/lib/api/assistant/configuration";
 import { getContentFragmentBlob } from "@app/lib/api/assistant/conversation/content_fragment";
-import { renderConversationForModel } from "@app/lib/api/assistant/generation";
 import {
   batchRenderMessages,
   canReadMessage,
 } from "@app/lib/api/assistant/messages";
 import { getContentFragmentGroupIds } from "@app/lib/api/assistant/permissions";
+import { renderConversationForModel } from "@app/lib/api/assistant/preprocessing";
 import {
   makeAgentMentionsRateLimitKeyForWorkspace,
   makeMessageRateLimitKeyForWorkspace,
@@ -51,6 +55,7 @@ import logger from "@app/logger/logger";
 import { launchUpdateUsageWorkflow } from "@app/temporal/usage_queue/client";
 import type {
   AgentActionSuccessEvent,
+  AgentConfigurationType,
   AgentDisabledErrorEvent,
   AgentErrorEvent,
   AgentGenerationCancelledEvent,
@@ -85,6 +90,7 @@ import {
   assertNever,
   ConversationError,
   Err,
+  GEMINI_2_FLASH_MODEL_CONFIG,
   getSmallWhitelistedModel,
   isAgentMention,
   isAgentMessageType,
@@ -149,15 +155,14 @@ export async function createConversation(
   };
 }
 
-export async function updateConversation(
+export async function updateConversationTitle(
   auth: Authenticator,
-  conversationId: string,
   {
+    conversationId,
     title,
-    visibility,
   }: {
-    title: string | null;
-    visibility: ConversationVisibility;
+    conversationId: string;
+    title: string;
   }
 ): Promise<Result<ConversationType, ConversationError>> {
   const conversation = await ConversationResource.fetchById(
@@ -166,10 +171,10 @@ export async function updateConversation(
   );
 
   if (!conversation) {
-    throw new Error(`Conversation ${conversationId} not found`);
+    return new Err(new ConversationError("conversation_not_found"));
   }
 
-  await conversation.updateVisiblity(visibility, title);
+  await conversation.updateTitle(title);
 
   return getConversation(auth, conversationId);
 }
@@ -204,7 +209,7 @@ export async function deleteConversation(
   if (destroy) {
     await conversation.delete(auth);
   } else {
-    await conversation.updateVisiblity("deleted");
+    await conversation.updateVisibilityToDeleted();
   }
   return new Ok({ success: true });
 }
@@ -233,6 +238,7 @@ export async function getConversation(
   const messages = await Message.findAll({
     where: {
       conversationId: conversation.id,
+      workspaceId: owner.id,
     },
     order: [
       ["rank", "ASC"],
@@ -314,6 +320,7 @@ export async function getConversationMessageType(
     where: {
       conversationId: conversation.id,
       sId: messageId,
+      workspaceId: auth.getNonNullableWorkspace().id,
     },
   });
 
@@ -450,6 +457,142 @@ export async function generateConversationTitle(
   return new Ok(title);
 }
 
+export async function getSuggestedAgentsForConversation(
+  auth: Authenticator,
+  conversation: ConversationWithoutContentType
+): Promise<Result<LightAgentConfigurationType[], Error>> {
+  const owner = auth.getNonNullableWorkspace();
+
+  // We could have passed the usermessage id instead of the conversation id, but user message has a randomly generated sId
+  // and this comes from a route so since we don't want to pass the model id in a route we use the conversation sId.
+  const message = await Message.findOne({
+    where: {
+      conversationId: conversation.id,
+    },
+    order: [
+      ["rank", "DESC"],
+      ["version", "ASC"],
+    ],
+    include: [
+      {
+        model: UserMessage,
+        as: "userMessage",
+        required: false,
+      },
+    ],
+  });
+
+  const content = message?.userMessage?.content;
+  if (!content) {
+    return new Err(
+      new Error("Error suggesting agents: no content found in conversation.")
+    );
+  }
+
+  let model = getSmallWhitelistedModel(owner);
+  if (!model) {
+    return new Err(
+      new Error("Error suggesting agents: failed to find a whitelisted model.")
+    );
+  }
+
+  // TODO(daphne): See if we can put Flash 2 as the default model.
+  if (isProviderWhitelisted(owner, "google_ai_studio")) {
+    model = GEMINI_2_FLASH_MODEL_CONFIG;
+  }
+
+  const config = cloneBaseConfig(
+    getDustProdAction("suggest-agent-from-message").config
+  );
+  config.MODEL.provider_id = model.providerId;
+  config.MODEL.model_id = model.modelId;
+
+  // Get all active agents for the workspace
+  const agents = await getAgentConfigurations({
+    auth,
+    agentsGetView: "list",
+    variant: "full", // We load the full agent configuration to get the actions name and description.
+  });
+  const agentUsages = await getAgentsUsage({
+    workspaceId: owner.sId,
+  });
+
+  // Filter out agents that have not been used in any conversation.
+  const usedAgents = agents.filter((a: AgentConfigurationType) => {
+    const usage = agentUsages.find((u: AgentUsageCount) => u.agentId === a.sId);
+    return usage?.messageCount ? usage.conversationCount > 0 : false;
+  });
+
+  // If no agents have been used, suggest all agents any way.
+  const agentsToSuggest = usedAgents.length > 0 ? usedAgents : agents;
+
+  const formattedAgents = agentsToSuggest.map((a) => ({
+    id: a.sId,
+    displayName: `@${a.name}`,
+    description: a.description,
+    tools: a.actions.map((a) => ({
+      name: a.name,
+      description: a.description,
+    })),
+    visualizationEnabled: a.visualizationEnabled,
+    userFavorite: a.userFavorite,
+  }));
+
+  const res = await runActionStreamed(
+    auth,
+    "suggest-agent-from-message",
+    config,
+    [
+      {
+        agents: formattedAgents,
+        message: content,
+      },
+    ],
+    {
+      conversationId: conversation.sId,
+      workspaceId: owner.sId,
+    }
+  );
+
+  if (res.isErr()) {
+    return new Err(new Error(`Error suggesting agents: ${res.error}`));
+  }
+
+  const { eventStream } = res.value;
+
+  let suggestions: LightAgentConfigurationType[] = [];
+
+  for await (const event of eventStream) {
+    if (event.type === "error") {
+      return new Err(
+        new Error(`Error suggesting agents: ${event.content.message}`)
+      );
+    }
+
+    if (event.type === "block_execution") {
+      const e = event.content.execution[0][0];
+      if (e.error) {
+        return new Err(new Error(`Error suggesting agents: ${e.error}`));
+      }
+
+      if (event.content.block_name === "OUTPUT" && e.value) {
+        const output = e.value as {
+          suggested_agents: {
+            id: string;
+          }[];
+        };
+        suggestions = removeNulls(
+          output.suggested_agents.map((a) =>
+            agents.find((a2) => a2.sId === a.id)
+          )
+        );
+      }
+    }
+  }
+
+  return new Ok(suggestions);
+}
+
 /**
  * Conversation API
  */
@@ -468,6 +611,8 @@ async function getConversationRankVersionLock(
   // Get a lock using the unique lock key (number withing postgresql BigInt range).
   const hash = md5(`conversation_message_rank_version_${conversation.id}`);
   const lockKey = parseInt(hash, 16) % 9999999999;
+  // OK because we need to setup a lock
+  // eslint-disable-next-line dust/no-raw-sql
   await frontSequelize.query("SELECT pg_advisory_xact_lock(:key)", {
     transaction: t,
     replacements: { key: lockKey },
@@ -604,6 +749,20 @@ export async function* postUserMessage(
   const agentConfigurations = removeNulls(results[0]);
 
   for (const agentConfig of agentConfigurations) {
+    if (!canAccessAgent(agentConfig)) {
+      yield {
+        type: "agent_disabled_error",
+        created: Date.now(),
+        configurationId: agentConfig.sId,
+        error: {
+          code: "not_allowed",
+          message:
+            "This agent is either disabled or you don't have access to it.",
+        },
+      };
+      return;
+    }
+
     if (!isProviderWhitelisted(owner, agentConfig.model.providerId)) {
       yield {
         type: "agent_disabled_error",
@@ -664,7 +823,8 @@ export async function* postUserMessage(
               await UserMessage.create(
                 {
                   content,
-                  localMCPServerIds: context.localMCPServerIds ?? [],
+                  // TODO(MCP Clean-up): Rename field in DB.
+                  clientSideMCPServerIds: context.clientSideMCPServerIds ?? [],
                   userContextUsername: context.username,
                   userContextTimezone: context.timezone,
                   userContextFullName: context.fullName,
@@ -933,6 +1093,26 @@ export async function* postUserMessage(
   void logIfUserUnknown();
 }
 
+/**
+ * Can a user mention a given configuration
+ */
+function canAccessAgent(
+  agentConfiguration: LightAgentConfigurationType
+): boolean {
+  switch (agentConfiguration.status) {
+    case "active":
+    case "draft":
+      return agentConfiguration.canRead;
+    case "disabled_free_workspace":
+    case "disabled_missing_datasource":
+    case "disabled_by_admin":
+    case "archived":
+      return false;
+    default:
+      assertNever(agentConfiguration.status);
+  }
+}
+
 /** This method creates a new user message version, and if there are new agent
  *  mentions, run them
  *  TODO: support editing with new agent mentions for any
@@ -1052,6 +1232,20 @@ export async function* editUserMessage(
   const agentConfigurations = removeNulls(results[0]);
 
   for (const agentConfig of agentConfigurations) {
+    if (!canAccessAgent(agentConfig)) {
+      yield {
+        type: "agent_disabled_error",
+        created: Date.now(),
+        configurationId: agentConfig.sId,
+        error: {
+          code: "not_allowed",
+          message:
+            "This agent is either disabled or you don't have access to it.",
+        },
+      };
+      return;
+    }
+
     if (!isProviderWhitelisted(owner, agentConfig.model.providerId)) {
       yield {
         type: "agent_disabled_error",
@@ -1126,8 +1320,8 @@ export async function* editUserMessage(
               await UserMessage.create(
                 {
                   content,
-                  // No support for local MCP servers when editing/retrying a user message.
-                  localMCPServerIds: [],
+                  // No support for client-side MCP servers when editing/retrying a user message.
+                  clientSideMCPServerIds: [],
                   userContextUsername: userMessageRow.userContextUsername,
                   userContextTimezone: userMessageRow.userContextTimezone,
                   userContextFullName: userMessageRow.userContextFullName,
@@ -1789,7 +1983,6 @@ async function* streamRunAgentEvents(
 
       // All other events that won't impact the database and are related to actions or tokens
       // generation.
-      case "tool_approve_execution":
       case "browse_params":
       case "conversation_include_file_params":
       case "dust_app_run_block":
@@ -1804,8 +1997,10 @@ async function* streamRunAgentEvents(
       case "tables_query_model_output":
       case "tables_query_output":
       case "tables_query_started":
-      case "websearch_params":
+      case "tool_approve_execution":
+      case "tool_notification":
       case "tool_params":
+      case "websearch_params":
         yield event;
         break;
 

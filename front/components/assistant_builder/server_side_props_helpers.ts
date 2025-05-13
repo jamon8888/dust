@@ -29,10 +29,10 @@ import {
   isBrowseConfiguration,
   isDustAppRunConfiguration,
   isMCPServerConfiguration,
-  isPlatformMCPServerConfiguration,
   isProcessConfiguration,
   isReasoningConfiguration,
   isRetrievalConfiguration,
+  isServerSideMCPServerConfiguration,
   isTablesQueryConfiguration,
   isWebsearchConfiguration,
 } from "@app/lib/actions/types/guards";
@@ -201,7 +201,7 @@ async function getProcessActionConfiguration(
 
   processConfiguration.configuration.dataSourceConfigurations =
     await renderDataSourcesConfigurations(action, dataSourceViews);
-  processConfiguration.configuration.schema = action.schema;
+  processConfiguration.configuration.jsonSchema = action.jsonSchema;
 
   return processConfiguration;
 }
@@ -235,7 +235,7 @@ async function getMCPServerActionConfiguration(
   action: MCPServerConfigurationType,
   dataSourceViews: DataSourceViewResource[]
 ): Promise<AssistantBuilderActionConfiguration> {
-  assert(isPlatformMCPServerConfiguration(action));
+  assert(isServerSideMCPServerConfiguration(action));
 
   const builderAction = getDefaultMCPServerActionConfiguration();
   if (builderAction.type !== "MCP") {
@@ -261,8 +261,31 @@ async function getMCPServerActionConfiguration(
       )
     : null;
 
+  builderAction.configuration.dustAppConfiguration =
+    action.dustAppConfiguration;
+
   builderAction.configuration.childAgentId = action.childAgentId;
 
+  const { reasoningModel } = action;
+  if (reasoningModel) {
+    const supportedReasoningModel = REASONING_MODEL_CONFIGS.find(
+      (m) =>
+        m.modelId === reasoningModel.modelId &&
+        m.providerId === reasoningModel.providerId &&
+        (m.reasoningEffort ?? null) === (reasoningModel.reasoningEffort ?? null)
+    );
+    if (supportedReasoningModel) {
+      const { modelId, providerId, reasoningEffort } = supportedReasoningModel;
+      builderAction.configuration.reasoningModel = {
+        modelId,
+        providerId,
+        temperature: null,
+        reasoningEffort: reasoningEffort ?? null,
+      };
+    }
+  }
+
+  builderAction.configuration.timeFrame = action.timeFrame;
   builderAction.configuration.additionalConfiguration =
     action.additionalConfiguration;
 

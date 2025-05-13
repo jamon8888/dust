@@ -469,8 +469,11 @@ module.exports = {
           "0%": {
             opacity: 1,
           },
-          "90%": {
+          "60%": {
             opacity: 1,
+          },
+          "70%": {
+            opacity: 0,
           },
           "100%": {
             opacity: 0,
@@ -812,11 +815,11 @@ module.exports = {
         ".s-heading-xs": {
           fontSize: theme("fontSize.xs[0]"),
           lineHeight: theme("fontSize.xs[1].lineHeight"),
-          letterSpacing: theme("fontSize.sm[1].letterSpacing"),
+          letterSpacing: theme("fontSize.xs[1].letterSpacing"),
           fontWeight: "600",
         },
         ".s-heading-sm": {
-          fontSize: theme("fontSize.xs[0]"),
+          fontSize: theme("fontSize.sm[0]"),
           lineHeight: theme("fontSize.sm[1].lineHeight"),
           letterSpacing: theme("fontSize.sm[1].letterSpacing"),
           fontWeight: "600",

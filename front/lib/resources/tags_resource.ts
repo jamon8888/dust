@@ -1,23 +1,26 @@
+import _ from "lodash";
 import type {
   Attributes,
   CreationAttributes,
   ModelStatic,
   Transaction,
 } from "sequelize";
+import sequelize from "sequelize/lib/sequelize";
 
 import type { Authenticator } from "@app/lib/auth";
 import { TagAgentModel } from "@app/lib/models/assistant/tag_agent";
 import { TagModel } from "@app/lib/models/tags";
+import { BaseResource } from "@app/lib/resources/base_resource";
+import type { ReadonlyAttributesType } from "@app/lib/resources/storage/types";
 import {
   getResourceIdFromSId,
   isResourceSId,
   makeSId,
-} from "@app/lib/resources//string_ids";
-import { BaseResource } from "@app/lib/resources/base_resource";
-import type { ReadonlyAttributesType } from "@app/lib/resources/storage/types";
+} from "@app/lib/resources/string_ids";
 import type { ResourceFindOptions } from "@app/lib/resources/types";
 import type { ModelId, Result } from "@app/types";
 import { Err, Ok, removeNulls } from "@app/types";
+import type { TagTypeWithUsage } from "@app/types/tag";
 
 // Attributes are marked as read-only to reflect the stateless nature of our Resource.
 // This design will be moved up to BaseResource once we transition away from Sequelize.
@@ -113,6 +116,87 @@ export class TagResource extends BaseResource<TagModel> {
     options?: ResourceFindOptions<TagModel>
   ) {
     return this.baseFetch(auth, options);
+  }
+
+  static async findAllWithUsage(
+    auth: Authenticator
+  ): Promise<TagTypeWithUsage[]> {
+    const tags = await this.model.findAll({
+      where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
+      },
+      attributes: [
+        "id",
+        "name",
+        "createdAt",
+        "updatedAt",
+        [
+          sequelize.literal(`
+            (
+              SELECT COUNT(DISTINCT ac."sId")
+              FROM tag_agents ta
+              JOIN agent_configurations ac ON ac.id = ta."agentConfigurationId" 
+              WHERE ta."tagId" = tags.id AND ac.status = 'active'
+            )
+          `),
+          "usage",
+        ],
+      ],
+      order: [[sequelize.literal("usage"), "DESC"]],
+    });
+
+    return tags.map((tag) => {
+      return {
+        sId: this.modelIdToSId({
+          id: tag.id,
+          workspaceId: auth.getNonNullableWorkspace().id,
+        }),
+        name: tag.name,
+        usage: (tag.get({ plain: true }) as any).usage as number,
+      };
+    });
+  }
+
+  static async listForAgent(
+    auth: Authenticator,
+    agentConfigurationId: number
+  ): Promise<TagResource[]> {
+    const tags = await TagAgentModel.findAll({
+      where: {
+        agentConfigurationId,
+      },
+    });
+    return this.baseFetch(auth, {
+      where: {
+        id: tags.map((t) => t.tagId),
+      },
+    });
+  }
+
+  static async listForAgents(
+    auth: Authenticator,
+    agentConfigurationIds: number[]
+  ): Promise<Record<number, TagResource[]>> {
+    const tagAgents = await TagAgentModel.findAll({
+      where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
+        agentConfigurationId: agentConfigurationIds,
+      },
+    });
+    const tags = await this.baseFetch(auth, {
+      where: {
+        id: [...new Set(tagAgents.map((t) => t.tagId))],
+      },
+    });
+
+    const tagsMap = _.keyBy(tags, "id");
+    return _.mapValues(_.groupBy(tagAgents, "agentConfigurationId"), (group) =>
+      group.map((tagAgent) => tagsMap[tagAgent.tagId])
+    );
+  }
+
+  async updateName(name: string) {
+    await this.update({ name });
   }
 
   async delete(

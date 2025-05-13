@@ -1,4 +1,5 @@
 import {
+  ActionGlobeAltIcon,
   Avatar,
   BookOpenIcon,
   Button,
@@ -7,7 +8,6 @@ import {
   CardGrid,
   Chip,
   classNames,
-  CommandIcon,
   ContentMessage,
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -15,7 +15,12 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
   InformationCircleIcon,
   Input,
@@ -35,6 +40,7 @@ import {
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import assert from "assert";
 import { uniqueId } from "lodash";
+import { BarChartIcon, LightbulbIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import React, {
   useCallback,
@@ -89,8 +95,15 @@ import {
   getDefaultMCPServerActionConfiguration,
   isDefaultActionName,
 } from "@app/components/assistant_builder/types";
-import { getVisual } from "@app/lib/actions/mcp_icons";
-import { getMCPServerRequirements } from "@app/lib/actions/mcp_internal_actions/input_schemas";
+import {
+  isReservedName,
+  isUsableAsCapability,
+  isUsableInKnowledge,
+  useBuilderActionInfo,
+} from "@app/components/assistant_builder/useBuilderActionInfo";
+import { getAvatar } from "@app/lib/actions/mcp_icons";
+import type { InternalMCPServerNameType } from "@app/lib/actions/mcp_internal_actions/constants";
+import { getMCPServerRequirements } from "@app/lib/actions/mcp_internal_actions/utils";
 import { ACTION_SPECIFICATIONS } from "@app/lib/actions/utils";
 import type { MCPServerViewType } from "@app/lib/api/mcp";
 import { useFeatureFlags } from "@app/lib/swr/workspaces";
@@ -117,44 +130,6 @@ const ADVANCED_ACTION_CATEGORIES = [
   "DUST_APP_RUN",
   "MCP",
 ] as const satisfies Array<AssistantBuilderActionConfiguration["type"]>;
-
-// Actions in this list are not configurable via the "add tool" menu.
-// Instead, they should be handled in the `Capabilities` component.
-// Note: not all capabilities are actions (eg: visualization)
-const CAPABILITIES_ACTION_CATEGORIES = [
-  "WEB_NAVIGATION",
-  "REASONING",
-] as const satisfies Array<AssistantBuilderActionConfiguration["type"]>;
-
-const isUsableAsCapability = (
-  id: string,
-  mcpServerViews: MCPServerViewType[]
-) => {
-  const view = mcpServerViews.find((v) => v.id === id);
-  if (!view) {
-    return false;
-  }
-  const requirements = getMCPServerRequirements(view);
-  return view.server.isDefault && requirements.noRequirement;
-};
-
-const isUsableInKnowledge = (
-  id: string,
-  mcpServerViews: MCPServerViewType[]
-) => {
-  const view = mcpServerViews.find((v) => v.id === id);
-  if (!view) {
-    return false;
-  }
-  return view.server.isDefault && !isUsableAsCapability(id, mcpServerViews);
-};
-
-// We reserve the name we use for capability actions, as these aren't
-// configurable via the "add tool" menu.
-const isReservedName = (name: string) =>
-  CAPABILITIES_ACTION_CATEGORIES.some(
-    (c) => getDefaultActionConfiguration(c)?.name === name
-  );
 
 function ActionModeSection({
   children,
@@ -202,10 +177,12 @@ function actionIcon(
     )?.server;
 
     if (server) {
-      return getVisual(server);
+      return getAvatar(server, "xs");
     }
   }
-  return React.createElement(ACTION_SPECIFICATIONS[action.type].cardIcon);
+  return (
+    <Avatar icon={ACTION_SPECIFICATIONS[action.type].cardIcon} size="xs" />
+  );
 }
 
 function actionDisplayName(action: AssistantBuilderActionConfiguration) {
@@ -245,107 +222,18 @@ export default function ActionsScreen({
   enableReasoningTool,
   reasoningModels,
 }: ActionScreenProps) {
-  const { spaces, mcpServerViews } = useContext(AssistantBuilderContext);
+  const { mcpServerViews } = useContext(AssistantBuilderContext);
   const { hasFeature } = useFeatureFlags({
     workspaceId: owner.sId,
   });
 
-  const isCapabilityAction = useCallback(
-    (action: AssistantBuilderActionConfiguration) => {
-      if (action.type === "MCP") {
-        return isUsableAsCapability(
-          action.configuration.mcpServerViewId,
-          mcpServerViews
-        );
-      }
-
-      return (CAPABILITIES_ACTION_CATEGORIES as string[]).includes(action.type);
-    },
-    [mcpServerViews]
-  );
-
-  const configurableActions = builderState.actions.filter(
-    (a) => !isCapabilityAction(a)
-  );
-
   const isLegacyConfig = isLegacyAssistantBuilderConfiguration(builderState);
 
-  const spaceIdToActions = useMemo(() => {
-    return configurableActions.reduce<
-      Record<string, AssistantBuilderActionConfigurationWithId[]>
-    >((acc, action) => {
-      const addActionToSpace = (spaceId?: string) => {
-        if (spaceId) {
-          acc[spaceId] = (acc[spaceId] || []).concat(action);
-        }
-      };
-
-      const actionType = action.type;
-
-      switch (actionType) {
-        case "TABLES_QUERY":
-          Object.values(action.configuration).forEach((config) => {
-            addActionToSpace(config.dataSourceView.spaceId);
-          });
-          break;
-
-        case "RETRIEVAL_SEARCH":
-        case "RETRIEVAL_EXHAUSTIVE":
-        case "PROCESS":
-          Object.values(action.configuration.dataSourceConfigurations).forEach(
-            (config) => {
-              addActionToSpace(config.dataSourceView.spaceId);
-            }
-          );
-          break;
-
-        case "DUST_APP_RUN":
-          addActionToSpace(action.configuration.app?.space.sId);
-          break;
-
-        case "MCP":
-          if (action.configuration.dataSourceConfigurations) {
-            Object.values(
-              action.configuration.dataSourceConfigurations
-            ).forEach((config) => {
-              addActionToSpace(config.dataSourceView.spaceId);
-            });
-          }
-
-          if (action.configuration.tablesConfigurations) {
-            Object.values(action.configuration.tablesConfigurations).forEach(
-              (config) => {
-                addActionToSpace(config.dataSourceView.spaceId);
-              }
-            );
-          }
-
-          if (action.configuration.mcpServerViewId) {
-            const mcpServerView = mcpServerViews.find(
-              (v) => v.id === action.configuration.mcpServerViewId
-            );
-            // Default MCP server themselves are not accounted for in the space restriction.
-            if (mcpServerView && !mcpServerView.server.isDefault) {
-              addActionToSpace(mcpServerView.spaceId);
-            }
-          }
-          break;
-
-        case "WEB_NAVIGATION":
-        case "REASONING":
-          break;
-
-        default:
-          assertNever(actionType);
-      }
-      return acc;
-    }, {});
-  }, [configurableActions, mcpServerViews]);
-
-  const nonGlobalSpacessUsedInActions = useMemo(() => {
-    const nonGlobalSpaces = spaces.filter((s) => s.kind !== "global");
-    return nonGlobalSpaces.filter((v) => spaceIdToActions[v.sId]?.length > 0);
-  }, [spaceIdToActions, spaces]);
+  const {
+    configurableActions,
+    nonGlobalSpacessUsedInActions,
+    spaceIdToActions,
+  } = useBuilderActionInfo(builderState);
 
   const updateAction = useCallback(
     function _updateAction({
@@ -403,6 +291,7 @@ export default function ActionsScreen({
         isOpen={pendingAction.action !== null}
         builderState={builderState}
         initialAction={pendingAction.action}
+        isEditing={!!pendingAction.previousActionName}
         spacesUsedInActions={spaceIdToActions}
         onSave={(newAction) => {
           setEdited(true);
@@ -460,7 +349,7 @@ export default function ActionsScreen({
       <div className="flex flex-col gap-8 text-sm text-muted-foreground dark:text-muted-foreground-night">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <Page.Header title="Tools & Data sources" />
+            <Page.Header title="Tools & Knowledge" />
             <Page.P>
               <span className="text-sm text-muted-foreground dark:text-muted-foreground-night">
                 Configure the tools that your agent is able to use, such as{" "}
@@ -622,6 +511,7 @@ type NewActionModalProps = {
   isOpen: boolean;
   builderState: AssistantBuilderState;
   initialAction: AssistantBuilderActionConfigurationWithId | null;
+  isEditing: boolean;
   spacesUsedInActions: SpaceIdToActions;
   onSave: (newAction: AssistantBuilderActionConfigurationWithId) => void;
   onClose: () => void;
@@ -638,6 +528,7 @@ type NewActionModalProps = {
 function NewActionModal({
   isOpen,
   initialAction,
+  isEditing,
   spacesUsedInActions,
   onSave,
   onClose,
@@ -792,6 +683,7 @@ function NewActionModal({
             {newActionConfig && (
               <ActionEditor
                 action={newActionConfig}
+                isEditing={isEditing}
                 spacesUsedInActions={spacesUsedInActions}
                 updateAction={updateAction}
                 owner={owner}
@@ -858,7 +750,7 @@ function ActionCard({
     >
       <div className="flex w-full flex-col gap-2 text-sm">
         <div className="flex w-full items-center gap-2 font-medium text-foreground dark:text-foreground-night">
-          <Avatar size="xs" visual={actionIcon(action, mcpServerViews)} />
+          {actionIcon(action, mcpServerViews)}
           <div className="w-full truncate">{actionDisplayName(action)}</div>
         </div>
         {isLegacyConfig ? (
@@ -871,7 +763,7 @@ function ActionCard({
             />
           </div>
         ) : (
-          <div className="w-full truncate text-muted-foreground dark:text-muted-foreground-night">
+          <div className="w-full text-muted-foreground dark:text-muted-foreground-night">
             {actionError ? (
               <span className="text-warning-500">{actionError}</span>
             ) : (
@@ -887,6 +779,7 @@ function ActionCard({
 interface ActionConfigEditorProps {
   owner: WorkspaceType;
   action: AssistantBuilderActionConfigurationWithId;
+  isEditing: boolean;
   spacesUsedInActions: SpaceIdToActions;
   instructions: string | null;
   updateAction: (args: {
@@ -904,6 +797,7 @@ interface ActionConfigEditorProps {
 function ActionConfigEditor({
   owner,
   action,
+  isEditing,
   spacesUsedInActions,
   instructions,
   updateAction,
@@ -991,6 +885,7 @@ function ActionConfigEditor({
         <MCPAction
           owner={owner}
           action={action}
+          isEditing={isEditing}
           allowedSpaces={allowedSpaces}
           updateAction={updateAction}
           setEdited={setEdited}
@@ -1049,6 +944,7 @@ function ActionConfigEditor({
 
 interface ActionEditorProps {
   action: AssistantBuilderActionConfigurationWithId;
+  isEditing: boolean;
   spacesUsedInActions: SpaceIdToActions;
   showInvalidActionNameError: string | null;
   showInvalidActionDescError: string | null;
@@ -1069,6 +965,7 @@ interface ActionEditorProps {
 
 function ActionEditor({
   action,
+  isEditing,
   spacesUsedInActions,
   showInvalidActionNameError,
   showInvalidActionDescError,
@@ -1118,7 +1015,7 @@ function ActionEditor({
       <ActionModeSection show={true}>
         <div className="flex w-full flex-row items-center justify-between px-1">
           <Page.Header
-            title={actionDisplayName(action) || "Select a Toolset"}
+            title={actionDisplayName(action) || "Select tools"}
             icon={ACTION_SPECIFICATIONS[action.type].cardIcon}
           />
           {shouldDisplayAdvancedSettings && (
@@ -1162,6 +1059,7 @@ function ActionEditor({
         <ActionConfigEditor
           owner={owner}
           action={action}
+          isEditing={isEditing}
           spacesUsedInActions={spacesUsedInActions}
           instructions={builderState.instructions}
           updateAction={updateAction}
@@ -1243,74 +1141,60 @@ function AdvancedSettings({
     ) ?? reasoningModels?.[0];
 
   return (
-    <Popover
-      popoverTriggerAsChild
-      trigger={
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <Button
           label="Advanced settings"
           variant="outline"
           size="sm"
           isSelect
         />
-      }
-      content={
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col items-start justify-start">
-              <div className="w-full grow text-sm font-bold text-muted-foreground dark:text-muted-foreground-night">
-                Max steps per run
-              </div>
-              <div className="w-full grow text-sm text-muted-foreground dark:text-muted-foreground-night">
-                up to {MAX_STEPS_USE_PER_RUN_LIMIT}
-              </div>
-            </div>
-            <Input
-              value={maxStepsPerRun?.toString() ?? ""}
-              placeholder=""
-              name="maxStepsPerRun"
-              onChange={(e) => {
-                if (!e.target.value || e.target.value === "") {
-                  setMaxStepsPerRun(null);
-                  return;
-                }
-                const value = parseInt(e.target.value);
-                if (
-                  !isNaN(value) &&
-                  value >= 0 &&
-                  value <= MAX_STEPS_USE_PER_RUN_LIMIT
-                ) {
-                  setMaxStepsPerRun(value);
-                }
-              }}
-            />
-            {(reasoningModels?.length ?? 0) > 1 && setReasoningModel && (
-              <div className="flex flex-col gap-2">
-                <div className="font-semibold text-muted-foreground dark:text-muted-foreground-night">
-                  Reasoning model
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="primary"
-                      label={reasoningModel?.displayName}
-                    />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent>
-                    {(reasoningModels ?? []).map((model) => (
-                      <DropdownMenuItem
-                        key={model.modelId + (model.reasoningEffort ?? "")}
-                        label={model.displayName}
-                        onClick={() => setReasoningModel(model)}
-                      />
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
-          </div>
-        </div>
-      }
-    />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-60 p-2" align="end">
+        <DropdownMenuLabel
+          label={`Max steps per run (up to ${MAX_STEPS_USE_PER_RUN_LIMIT})`}
+        />
+        <Input
+          value={maxStepsPerRun?.toString() ?? ""}
+          placeholder=""
+          name="maxStepsPerRun"
+          onChange={(e) => {
+            if (!e.target.value || e.target.value === "") {
+              setMaxStepsPerRun(null);
+              return;
+            }
+            const value = parseInt(e.target.value);
+            if (
+              !isNaN(value) &&
+              value >= 0 &&
+              value <= MAX_STEPS_USE_PER_RUN_LIMIT
+            ) {
+              setMaxStepsPerRun(value);
+            }
+          }}
+        />
+
+        {(reasoningModels?.length ?? 0) > 1 && setReasoningModel && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger label="Reasoning model" className="mt-1" />
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup
+                value={`${reasoningModel?.modelId}-${reasoningModel?.providerId}-${reasoningModel?.reasoningEffort ?? ""}`}
+              >
+                {(reasoningModels ?? []).map((model) => (
+                  <DropdownMenuRadioItem
+                    key={`${model.modelId}-${model.providerId}-${model.reasoningEffort ?? ""}`}
+                    value={`${model.modelId}-${model.providerId}-${model.reasoningEffort ?? ""}`}
+                    label={model.displayName}
+                    onClick={() => setReasoningModel(model)}
+                  />
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -1366,7 +1250,9 @@ function AddAction({
               return (
                 <DropdownMenuItem
                   key={view.id}
-                  icon={CommandIcon}
+                  icon={() => (
+                    <Avatar visual={getAvatar(view.server)} size="xs" />
+                  )}
                   label={asDisplayName(view.server.name)}
                   description={view.server.description}
                   onClick={() =>
@@ -1431,12 +1317,14 @@ function Capabilities({
     name,
     description,
     enabled,
+    icon,
     onEnable,
     onDisable,
   }: {
     name: string;
     description: string;
     enabled: boolean;
+    icon?: React.ComponentType;
     onEnable: () => void;
     onDisable: () => void;
   }) => {
@@ -1446,7 +1334,7 @@ function Capabilities({
         onCheckedChange={enabled ? onDisable : onEnable}
         className="mb-0 mt-0 pb-0 pr-0 pt-0"
       >
-        <DropdownMenuItem label={name} description={description} />
+        <DropdownMenuItem icon={icon} label={name} description={description} />
       </DropdownMenuCheckboxItem>
     );
   };
@@ -1497,46 +1385,66 @@ function Capabilities({
     builderState.actions,
   ]);
 
+  // Users should see the old web Capabilities only if
+  // their agents has it selected in the past or
+  // if they don't have mcp_actions activated
+  const shouldShowOldWebCapabilities = useMemo(() => {
+    // this is to catch any changes in the name
+    const webtoolsV2ServerName: InternalMCPServerNameType =
+      "web_search_&_browse_v2";
+
+    const webtoolsServer = mcpServerViews.find(
+      (view) => view.server.name === webtoolsV2ServerName
+    );
+    if (webtoolsServer != null) {
+      return isWebNavigationEnabled;
+    }
+
+    return true;
+  }, [isWebNavigationEnabled, mcpServerViews]);
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
-          label={
-            totalCapabilities
-              ? `Capabilities (${totalCapabilities})`
-              : "Capabilities"
-          }
+          label={"Capabilities"}
           size="sm"
+          isCounter={totalCapabilities > 0}
+          counterValue={`${totalCapabilities}`}
           isSelect
         />
       </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <Capability
-          name="Web search & browse"
-          description="Agent can search (Google) and retrieve information from specific websites."
-          enabled={isWebNavigationEnabled}
-          onEnable={() => {
-            setEdited(true);
-            const defaultWebNavigationAction =
-              getDefaultActionConfiguration("WEB_NAVIGATION");
-            assert(defaultWebNavigationAction);
-            setAction({
-              type: "insert",
-              action: defaultWebNavigationAction,
-            });
-          }}
-          onDisable={() => {
-            const defaultWebNavigationAction =
-              getDefaultActionConfiguration("WEB_NAVIGATION");
-            assert(defaultWebNavigationAction);
-            deleteAction(defaultWebNavigationAction.name);
-          }}
-        />
+      <DropdownMenuContent align="start">
+        {shouldShowOldWebCapabilities && (
+          <Capability
+            name="Web search & browse"
+            description="Agent can search (Google) and retrieve information from specific websites."
+            icon={() => <Avatar icon={ActionGlobeAltIcon} size="sm" />}
+            enabled={isWebNavigationEnabled}
+            onEnable={() => {
+              setEdited(true);
+              const defaultWebNavigationAction =
+                getDefaultActionConfiguration("WEB_NAVIGATION");
+              assert(defaultWebNavigationAction);
+              setAction({
+                type: "insert",
+                action: defaultWebNavigationAction,
+              });
+            }}
+            onDisable={() => {
+              const defaultWebNavigationAction =
+                getDefaultActionConfiguration("WEB_NAVIGATION");
+              assert(defaultWebNavigationAction);
+              deleteAction(defaultWebNavigationAction.name);
+            }}
+          />
+        )}
 
         <Capability
           name="Data visualization"
           description="Agent can generate charts and graphs."
+          icon={() => <Avatar icon={BarChartIcon} size="sm" />}
           enabled={builderState.visualizationEnabled}
           onEnable={() => {
             setEdited(true);
@@ -1558,6 +1466,7 @@ function Capabilities({
           <Capability
             name="Reasoning"
             description="Agent can decide to trigger a reasoning model for complex tasks"
+            icon={() => <Avatar icon={LightbulbIcon} size="sm" />}
             enabled={isReasoningEnabled}
             onEnable={() => {
               setEdited(true);
@@ -1582,6 +1491,7 @@ function Capabilities({
           return (
             <Capability
               key={view.id}
+              icon={() => getAvatar(view.server)}
               name={asDisplayName(view.server.name)}
               description={view.server.description}
               enabled={

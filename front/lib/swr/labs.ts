@@ -1,19 +1,28 @@
 // LABS - CAN BE REMOVED ANYTIME
 
 import { useSendNotification } from "@dust-tt/sparkle";
-import { useMemo } from "react";
 import type { Fetcher } from "swr";
 
 import type { DataSourceResource } from "@app/lib/resources/data_source_resource";
 import type { LabsConnectionsConfigurationResource } from "@app/lib/resources/labs_connections_resource";
-import { fetcher, useSWRWithDefaults } from "@app/lib/swr/swr";
+import { emptyArray, fetcher, useSWRWithDefaults } from "@app/lib/swr/swr";
 import { getPKCEConfig } from "@app/lib/utils/pkce";
 import type { GetLabsConnectionsConfigurationResponseBody } from "@app/pages/api/w/[wId]/labs/connections";
 import type { GetLabsTranscriptsConfigurationResponseBody } from "@app/pages/api/w/[wId]/labs/transcripts";
 import type { PatchTranscriptsConfiguration } from "@app/pages/api/w/[wId]/labs/transcripts/[tId]";
-import type { ConnectionCredentials, DataSourceType } from "@app/types";
-import type { LightWorkspaceType, ModelId } from "@app/types";
-import { isOAuthProvider, setupOAuthConnection } from "@app/types";
+import type {
+  ConnectionCredentials,
+  DataSourceType,
+  LabsConnectionProvider,
+  LightWorkspaceType,
+  ModelId,
+} from "@app/types";
+import {
+  assertNever,
+  isHubspotCredentials,
+  isOAuthProvider,
+  setupOAuthConnection,
+} from "@app/types";
 
 // Transcripts
 export function useLabsTranscriptsConfiguration({
@@ -132,7 +141,7 @@ export function useLabsSalesforceDataSourcesWithPersonalConnection({
   );
 
   return {
-    dataSources: useMemo(() => (data ? data.dataSources : []), [data]),
+    dataSources: data?.dataSources ?? emptyArray(),
     isLoading,
     isError: error,
     mutate,
@@ -317,10 +326,69 @@ export function useCreateLabsConnectionConfiguration({
     connectionId,
     credentials,
   }: {
-    provider: string;
+    provider: LabsConnectionProvider;
     connectionId?: string;
     credentials: ConnectionCredentials;
   }) => {
+    switch (provider) {
+      case "hubspot":
+        if (!isHubspotCredentials(credentials)) {
+          sendNotification({
+            type: "error",
+            title: "Invalid credentials format",
+            description:
+              "The provided credentials are not in the correct Hubspot format.",
+          });
+          return false;
+        }
+
+        const testRes = await fetch(
+          `/api/w/${workspaceId}/labs/connections/test-credentials`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              provider,
+              credentials,
+            }),
+          }
+        );
+
+        if (!testRes.ok) {
+          const error = await testRes.json();
+          sendNotification({
+            type: "error",
+            title: "Failed to test credentials",
+            description: error.error.message,
+          });
+          return false;
+        }
+
+        const testResult = await testRes.json();
+        if (!testResult.success) {
+          sendNotification({
+            type: "error",
+            title: "Credentials are invalid",
+            description:
+              testResult.error ||
+              "Please check your Hubspot credentials and try again.",
+          });
+          return false;
+        }
+        break;
+      case "linear":
+        sendNotification({
+          type: "error",
+          title: "Failed to create connection",
+          description: "Linear is not supported yet.",
+        });
+        return false;
+      default:
+        assertNever(provider);
+    }
+
     const res = await fetch(`/api/w/${workspaceId}/labs/connections`, {
       method: "POST",
       headers: {
@@ -425,7 +493,10 @@ export function useLabsConnectionConfigurations({
 
   const { data, error, mutate } = useSWRWithDefaults(
     `/api/w/${workspaceId}/labs/connections`,
-    configurationsFetcher
+    configurationsFetcher,
+    {
+      refreshInterval: 10000,
+    }
   );
 
   return {
