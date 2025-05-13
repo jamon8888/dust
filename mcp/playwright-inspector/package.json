@@ -1,0 +1,8 @@
+{
+    "name": "mcp-playwright-inspector",
+    "type": "module",
+    "dependencies": {
+      "playwright": "^1.43.1"
+    }
+  }
+  
