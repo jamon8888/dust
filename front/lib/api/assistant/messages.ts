@@ -43,6 +43,7 @@ import type {
 import { ConversationError, Err, Ok, removeNulls } from "@app/types";
 
 async function batchRenderUserMessages(
+  auth: Authenticator,
   messages: Message[]
 ): Promise<{ m: UserMessageType; rank: number; version: number }[]> {
   const userMessages = messages.filter(
@@ -60,6 +61,7 @@ async function batchRenderUserMessages(
   const [mentions, users] = await Promise.all([
     Mention.findAll({
       where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
         messageId: userMessages.map((m) => m.id),
       },
     }),
@@ -161,14 +163,18 @@ async function batchRenderAgentMessages(
       retrievalActionTypesFromAgentMessageIds(auth, agentMessageIds))(),
     (async () => dustAppRunTypesFromAgentMessageIds(auth, agentMessageIds))(),
     (async () => tableQueryTypesFromAgentMessageIds(auth, agentMessageIds))(),
-    (async () => processActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      processActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
     (async () => websearchActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => browseActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      browseActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
     (async () =>
       conversationIncludeFileTypesFromAgentMessageIds(agentMessageIds))(),
     (async () => reasoningActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => searchLabelsActionTypesFromAgentMessageIds(agentMessageIds))(),
-    (async () => mcpActionTypesFromAgentMessageIds(agentMessageIds))(),
+    (async () =>
+      searchLabelsActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
+    (async () =>
+      mcpActionTypesFromAgentMessageIds(auth, { agentMessageIds }))(),
   ]);
 
   if (!agentConfigurations) {
@@ -311,6 +317,7 @@ async function batchRenderContentFragment(
  * because there's no easy way to fetch only the latest version of a message.
  */
 async function getMaxRankMessages(
+  auth: Authenticator,
   conversation: ConversationResource,
   paginationParams: PaginationParams
 ): Promise<ModelId[]> {
@@ -318,6 +325,7 @@ async function getMaxRankMessages(
 
   const where: WhereOptions<Message> = {
     conversationId: conversation.id,
+    workspaceId: auth.getNonNullableWorkspace().id,
   };
 
   if (lastValue) {
@@ -345,12 +353,17 @@ async function getMaxRankMessages(
 }
 
 async function fetchMessagesForPage(
+  auth: Authenticator,
   conversation: ConversationResource,
   paginationParams: PaginationParams
 ): Promise<{ hasMore: boolean; messages: Message[] }> {
   const { orderColumn, orderDirection, limit } = paginationParams;
 
-  const messageIds = await getMaxRankMessages(conversation, paginationParams);
+  const messageIds = await getMaxRankMessages(
+    auth,
+    conversation,
+    paginationParams
+  );
 
   const hasMore = messageIds.length > limit;
   const relevantMessageIds = hasMore ? messageIds.slice(0, limit) : messageIds;
@@ -359,6 +372,7 @@ async function fetchMessagesForPage(
   const messages = await Message.findAll({
     where: {
       conversationId: conversation.id,
+      workspaceId: auth.getNonNullableWorkspace().id,
       id: {
         [Op.in]: relevantMessageIds,
       },
@@ -405,7 +419,7 @@ export async function batchRenderMessages(
   messages: Message[]
 ): Promise<Result<MessageWithRankType[], ConversationError>> {
   const [userMessages, agentMessagesRes, contentFragments] = await Promise.all([
-    batchRenderUserMessages(messages),
+    batchRenderUserMessages(auth, messages),
     batchRenderAgentMessages(auth, messages),
     batchRenderContentFragment(auth, conversationId, messages),
   ]);
@@ -453,6 +467,7 @@ export async function fetchConversationMessages(
   }
 
   const { hasMore, messages } = await fetchMessagesForPage(
+    auth,
     conversation,
     paginationParams
   );

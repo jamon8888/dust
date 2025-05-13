@@ -801,7 +801,6 @@ const WhitelistableFeaturesSchema = FlexibleEnumSchema<
   | "dev_mcp_actions"
   | "disable_run_logs"
   | "document_tracker"
-  | "experimental_mcp_actions"
   | "force_gdrive_labels_scope"
   | "google_ai_studio_experimental_models_feature"
   | "index_private_slack_channel"
@@ -1333,21 +1332,29 @@ const NotificationContentSchema = z.union([
   NotificationTextContentSchema,
 ]);
 
-const MCPNotificationEventSchema = z.object({
+const ToolNotificationProgressSchema = z.object({
+  progress: z.number(),
+  total: z.number(),
+  data: z.object({
+    label: z.string(),
+    output: NotificationContentSchema.optional(),
+  }),
+});
+
+export type ToolNotificationProgress = z.infer<
+  typeof ToolNotificationProgressSchema
+>;
+
+const ToolNotificationEventSchema = z.object({
   type: z.literal("tool_notification"),
   created: z.number(),
   configurationId: z.string(),
   messageId: z.string(),
   action: MCPActionTypeSchema,
-  notification: z.object({
-    progress: z.number(),
-    total: z.number(),
-    data: z.object({
-      label: z.string(),
-      output: NotificationContentSchema.optional(),
-    }),
-  }),
+  notification: ToolNotificationProgressSchema,
 });
+
+export type ToolNotificationEvent = z.infer<typeof ToolNotificationEventSchema>;
 
 const MCPValidationMetadataSchema = z.object({
   mcpServerName: z.string(),
@@ -1398,7 +1405,7 @@ const AgentActionSpecificEventSchema = z.union([
   TablesQueryStartedEventSchema,
   WebsearchParamsEventSchema,
   MCPParamsEventSchema,
-  MCPNotificationEventSchema,
+  ToolNotificationEventSchema,
   MCPApproveExecutionEventSchema,
 ]);
 export type AgentActionSpecificEvent = z.infer<
@@ -2919,7 +2926,13 @@ export type PostMCPResultsResponseType = z.infer<
   typeof PostMCPResultsResponseSchema
 >;
 
-const MCP_TOOL_STAKE_LEVELS = ["high", "low"] as const;
+const REMOTE_MCP_TOOL_STAKE_LEVELS = ["high", "low"] as const;
+export type RemoteMCPToolStakeLevelPublicType =
+  (typeof REMOTE_MCP_TOOL_STAKE_LEVELS)[number];
+const MCP_TOOL_STAKE_LEVELS = [
+  ...REMOTE_MCP_TOOL_STAKE_LEVELS,
+  "never_ask",
+] as const;
 export type MCPToolStakeLevelPublicType =
   (typeof MCP_TOOL_STAKE_LEVELS)[number];
 

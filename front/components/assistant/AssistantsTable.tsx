@@ -1,6 +1,8 @@
 import {
   Avatar,
+  BracesIcon,
   Button,
+  Checkbox,
   ClipboardIcon,
   Cog6ToothIcon,
   DataTable,
@@ -51,10 +53,32 @@ type RowData = {
   moreMenuItems?: MoreMenuItem[];
   tags: TagType[];
   action?: React.ReactNode;
+  isSelected: boolean;
+  canArchive: boolean;
 };
 
-const getTableColumns = (tags: TagType[]) => {
+const getTableColumns = (tags: TagType[], isBatchEdit: boolean) => {
   return [
+    ...(isBatchEdit
+      ? [
+          {
+            header: "",
+            accessorKey: "select",
+            cell: (info: CellContext<RowData, boolean>) => (
+              <DataTable.CellContent>
+                <Checkbox
+                  checked={info.row.original.isSelected}
+                  disabled={!info.row.original.canArchive}
+                />
+              </DataTable.CellContent>
+            ),
+            meta: {
+              className: "w-8",
+              tooltip: "Select",
+            },
+          },
+        ]
+      : []),
     {
       header: "Name",
       accessorKey: "name",
@@ -284,6 +308,9 @@ type AgentsTableProps = {
   ) => Promise<void>;
   showDisabledFreeWorkspacePopup: string | null;
   setShowDisabledFreeWorkspacePopup: (s: string | null) => void;
+  isBatchEdit: boolean;
+  selection: string[];
+  setSelection: (selection: string[]) => void;
 };
 
 export function AssistantsTable({
@@ -294,6 +321,9 @@ export function AssistantsTable({
   handleToggleAgentStatus,
   showDisabledFreeWorkspacePopup,
   setShowDisabledFreeWorkspacePopup,
+  isBatchEdit,
+  selection,
+  setSelection,
 }: AgentsTableProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState<{
     open: boolean;
@@ -306,6 +336,10 @@ export function AssistantsTable({
   const rows: RowData[] = useMemo(
     () =>
       agents.map((agentConfiguration) => {
+        const canArchive =
+          (agentConfiguration.canEdit || isAdmin(owner)) &&
+          agentConfiguration.status !== "archived" &&
+          agentConfiguration.scope !== "global";
         return {
           name: agentConfiguration.name,
           usage: agentConfiguration.usage ?? {
@@ -320,6 +354,8 @@ export function AssistantsTable({
           feedbacks: agentConfiguration.feedbacks,
           scope: agentConfiguration.scope,
           tags: agentConfiguration.tags,
+          isSelected: selection.includes(agentConfiguration.sId),
+          canArchive,
           action:
             agentConfiguration.scope === "global" ? (
               <GlobalAgentAction
@@ -333,7 +369,17 @@ export function AssistantsTable({
               />
             ) : undefined,
           onClick: () => {
-            setShowDetails(agentConfiguration);
+            if (isBatchEdit) {
+              if (canArchive) {
+                setSelection(
+                  selection.includes(agentConfiguration.sId)
+                    ? selection.filter((s) => s !== agentConfiguration.sId)
+                    : [...selection, agentConfiguration.sId]
+                );
+              }
+            } else {
+              setShowDetails(agentConfiguration);
+            }
           },
           moreMenuItems:
             agentConfiguration.scope !== "global" &&
@@ -363,7 +409,7 @@ export function AssistantsTable({
                     label: "Copy agent ID",
                     "data-gtm-label": "assistantCopyButton",
                     "data-gtm-location": "assistantDetails",
-                    icon: ClipboardIcon,
+                    icon: BracesIcon,
                     onClick: (e: React.MouseEvent) => {
                       e.stopPropagation();
                       void navigator.clipboard.writeText(
@@ -386,7 +432,7 @@ export function AssistantsTable({
                     kind: "item" as const,
                   },
                   {
-                    label: "Delete",
+                    label: "Archive",
                     "data-gtm-label": "assistantDeletionButton",
                     "data-gtm-location": "assistantDetails",
                     icon: TrashIcon,
@@ -410,6 +456,9 @@ export function AssistantsTable({
       setShowDetails,
       setShowDisabledFreeWorkspacePopup,
       showDisabledFreeWorkspacePopup,
+      selection,
+      setSelection,
+      isBatchEdit,
     ]
   );
 
@@ -434,7 +483,7 @@ export function AssistantsTable({
           <DataTable
             className="relative"
             data={rows}
-            columns={getTableColumns(tags)}
+            columns={getTableColumns(tags, isBatchEdit)}
           />
         )}
       </div>
