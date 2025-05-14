@@ -822,6 +822,7 @@ const WhitelistableFeaturesSchema = FlexibleEnumSchema<
   | "snowflake_connector_feature"
   | "usage_data_api"
   | "custom_webcrawler"
+  | "exploded_tables_query"
 >();
 
 export type WhitelistableFeature = z.infer<typeof WhitelistableFeaturesSchema>;
@@ -2891,6 +2892,15 @@ export const ValidateActionRequestBodySchema = z.object({
 
 export type ValidateActionRequestBodyType = z.infer<
   typeof ValidateActionRequestBodySchema
+>;
+
+export const PublicRegisterMCPRequestBodySchema = z.object({
+  serverId: z.string(),
+  serverName: z.string().min(3).max(25),
+});
+
+export type PublicRegisterMCPRequestBody = z.infer<
+  typeof PublicRegisterMCPRequestBodySchema
 >;
 
 export const RegisterMCPResponseSchema = z.object({
