@@ -1,13 +1,11 @@
 import { isSupportedImageContentType } from "@dust-tt/client";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import assert from "assert";
 import type { JSONSchema7 as JSONSchema } from "json-schema";
 
 import type {
   MCPToolStakeLevelType,
   MCPValidationMetadataType,
 } from "@app/lib/actions/constants";
-import { FALLBACK_MCP_TOOL_STAKE_LEVEL } from "@app/lib/actions/constants";
 import type { DustAppRunConfigurationType } from "@app/lib/actions/dust_app_run";
 import { tryCallMCPTool } from "@app/lib/actions/mcp_actions";
 import type { MCPServerAvailability } from "@app/lib/actions/mcp_internal_actions/constants";
@@ -41,7 +39,6 @@ import type {
   ActionConfigurationType,
   AgentActionSpecification,
 } from "@app/lib/actions/types/agent";
-import { isServerSideMCPToolConfiguration } from "@app/lib/actions/types/guards";
 import { getExecutionStatusFromConfig } from "@app/lib/actions/utils";
 import {
   processAndStoreFromUrl,
@@ -57,6 +54,7 @@ import { FileModel } from "@app/lib/resources/storage/models/files";
 import { makeSId } from "@app/lib/resources/string_ids";
 import { concurrentExecutor } from "@app/lib/utils/async_utils";
 import logger from "@app/logger/logger";
+import { statsDClient } from "@app/logger/statsDClient";
 import type {
   AgentConfigurationType,
   AgentMessageType,
@@ -129,8 +127,10 @@ export type ClientSideMCPToolType = Omit<
   ClientSideMCPServerConfigurationType,
   "type"
 > & {
-  type: "mcp_configuration";
   inputSchema: JSONSchema;
+  permission: MCPToolStakeLevelType;
+  toolServerId: string;
+  type: "mcp_configuration";
 };
 
 type WithToolNameMetadata<T> = T & {
@@ -297,11 +297,14 @@ export class MCPActionType extends BaseAction {
     };
   }
 
-  async renderForMultiActionsModel({
-    model,
-  }: {
-    model: ModelConfigurationType;
-  }): Promise<FunctionMessageTypeModel> {
+  async renderForMultiActionsModel(
+    _: Authenticator,
+    {
+      model,
+    }: {
+      model: ModelConfigurationType;
+    }
+  ): Promise<FunctionMessageTypeModel> {
     if (!this.functionCallName) {
       throw new Error("MCPAction: functionCallName is required");
     }
@@ -456,7 +459,8 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
 
     const { status: s } = await getExecutionStatusFromConfig(
       auth,
-      actionConfiguration
+      actionConfiguration,
+      agentMessage
     );
     let status:
       | "allowed_implicitly"
@@ -473,9 +477,7 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
         messageId: agentMessage.sId,
         action: mcpAction,
         inputs: rawInputs,
-        stake: isServerSideMCPToolConfiguration(actionConfiguration)
-          ? actionConfiguration.permission
-          : FALLBACK_MCP_TOOL_STAKE_LEVEL,
+        stake: actionConfiguration.permission,
         metadata: {
           toolName: actionConfiguration.originalName,
           mcpServerName: actionConfiguration.mcpServerName,
@@ -490,6 +492,7 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
 
         localLogger.info(
           {
+            workspaceId: owner.sId,
             actionName: actionConfiguration.name,
           },
           "Waiting for action validation"
@@ -503,7 +506,6 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
             data.type === "always_approved" &&
             data.actionId === mcpAction.id
           ) {
-            assert(isServerSideMCPToolConfiguration(actionConfiguration));
             const user = auth.getNonNullableUser();
             await user.appendToMetadata(
               `toolsValidations:${actionConfiguration.toolServerId}`,
@@ -551,8 +553,22 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
       executionState: status,
     });
 
+    const tags = [
+      `action:${actionConfiguration.name}`,
+      `mcp_server:${actionConfiguration.mcpServerName}`,
+      `workspace:${owner.sId}`,
+      `workspace_name:${owner.name}`,
+    ];
+
     if (status === "timeout") {
-      localLogger.info("Tool validation timed out");
+      statsDClient.increment("mcp_actions_timeout.count", 1, tags);
+      localLogger.info(
+        {
+          workspaceId: owner.sId,
+          actionName: actionConfiguration.name,
+        },
+        "Tool validation timed out"
+      );
       yield buildErrorEvent(
         action,
         agentConfiguration,
@@ -565,7 +581,14 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
     }
 
     if (status === "denied") {
-      localLogger.info("Action execution rejected by user");
+      statsDClient.increment("mcp_actions_denied.count", 1, tags);
+      localLogger.info(
+        {
+          workspaceId: owner.sId,
+          actionName: actionConfiguration.name,
+        },
+        "Action execution rejected by user"
+      );
       yield buildErrorEvent(
         action,
         agentConfiguration,
@@ -624,8 +647,11 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
     }
 
     if (!toolCallResult || toolCallResult.isErr()) {
+      statsDClient.increment("mcp_actions_error.count", 1, tags);
       localLogger.error(
         {
+          workspaceId: owner.sId,
+          actionName: actionConfiguration.name,
           error: toolCallResult?.error?.message,
         },
         "Error calling MCP tool on run."
@@ -826,6 +852,8 @@ export class MCPConfigurationServerRunner extends BaseActionConfigurationServerR
         fileId: c.file?.id,
       }))
     );
+
+    statsDClient.increment("mcp_actions_success.count", 1, tags);
 
     yield {
       type: "tool_success",

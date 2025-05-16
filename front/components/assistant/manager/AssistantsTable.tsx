@@ -1,26 +1,12 @@
 import {
   Avatar,
   BracesIcon,
-  Button,
   Checkbox,
-  ChevronDownIcon,
   Chip,
   ClipboardIcon,
-  Cog6ToothIcon,
   DataTable,
-  Dialog,
-  DialogContainer,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
+  EyeIcon,
   PencilSquareIcon,
-  SliderToggle,
-  Spinner,
   Tooltip,
   TrashIcon,
 } from "@dust-tt/sparkle";
@@ -28,75 +14,25 @@ import type { CellContext } from "@tanstack/react-table";
 import { useRouter } from "next/router";
 import { useMemo, useState } from "react";
 
+import { SCOPE_INFO } from "@app/components/assistant/AssistantDetails";
 import { DeleteAssistantDialog } from "@app/components/assistant/DeleteAssistantDialog";
+import { GlobalAgentAction } from "@app/components/assistant/manager/GlobalAgentAction";
+import { TableTagSelector } from "@app/components/assistant/manager/TableTagSelector";
 import { assistantUsageMessage } from "@app/components/assistant/Usage";
-import { useTheme } from "@app/components/sparkle/ThemeContext";
-import { useTags, useUpdateAgentTags } from "@app/lib/swr/tags";
-import { classNames, formatTimestampToFriendlyDate } from "@app/lib/utils";
+import { useTags } from "@app/lib/swr/tags";
+import {
+  classNames,
+  formatTimestampToFriendlyDate,
+  tagsSorter,
+} from "@app/lib/utils";
 import type {
   AgentConfigurationScope,
   AgentUsageType,
   LightAgentConfigurationType,
   WorkspaceType,
 } from "@app/types";
-import { isAdmin, isBuilder, pluralize } from "@app/types";
+import { isAdmin, pluralize } from "@app/types";
 import type { TagType } from "@app/types/tag";
-
-const TagSelector = ({
-  tags,
-  agentTags,
-  agentConfigurationId,
-  owner,
-  onChange,
-}: {
-  tags: TagType[];
-  agentTags: TagType[];
-  agentConfigurationId: string;
-  owner: WorkspaceType;
-  onChange: () => Promise<any>;
-}) => {
-  const [isLoading, setIsLoading] = useState(false);
-  const { isDark } = useTheme();
-  const updateAgentTags = useUpdateAgentTags({
-    owner,
-    agentConfigurationId,
-  });
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger>
-        <Button variant="ghost" icon={ChevronDownIcon} size="xmini" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        {tags.map((t) => {
-          const isChecked = agentTags.some((x) => x.sId === t.sId);
-          return (
-            <DropdownMenuCheckboxItem
-              key={t.sId}
-              onClick={async (e: React.MouseEvent) => {
-                setIsLoading(true);
-                e.stopPropagation();
-                e.preventDefault();
-                await updateAgentTags({
-                  addTagIds: isChecked ? [] : [t.sId],
-                  removeTagIds: isChecked ? [t.sId] : [],
-                });
-                await onChange();
-              }}
-              checked={isChecked}
-            >
-              <Chip size="xs" label={t.name} color="golden" />
-            </DropdownMenuCheckboxItem>
-          );
-        })}
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50">
-            <Spinner variant={isDark ? "light" : "dark"} />
-          </div>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-};
 
 type MoreMenuItem = {
   label: string;
@@ -118,6 +54,7 @@ type RowData = {
   onClick?: () => void;
   moreMenuItems?: MoreMenuItem[];
   agentTags: TagType[];
+  agentTagsAsString: string;
   action?: React.ReactNode;
   isSelected: boolean;
   canArchive: boolean;
@@ -161,7 +98,7 @@ const getTableColumns = ({
       cell: (info: CellContext<RowData, string>) => (
         <DataTable.CellContent>
           <div className={classNames("flex flex-row items-center gap-2 py-3")}>
-            <div className="">
+            <div>
               <Avatar visual={info.row.original.pictureUrl} size="sm" />
             </div>
             <div className="flex min-w-0 grow flex-col">
@@ -176,58 +113,54 @@ const getTableColumns = ({
         </DataTable.CellContent>
       ),
     },
-    ...(tags.length > 0
-      ? [
-          {
-            header: "Tags",
-            accessorKey: "agentTags",
-            cell: (info: CellContext<RowData, TagType[]>) => (
-              <DataTable.CellContent
-                grow
-                className="flex flex-row items-center"
-              >
-                <div className="flex flex-row items-center">
-                  <div className="flex-grow truncate">
-                    <Tooltip
-                      tooltipTriggerAsChild
-                      label={
-                        info.getValue().length > 0
-                          ? info
-                              .getValue()
-                              .map((t) => t.name)
-                              .join(", ")
-                          : "-"
-                      }
-                      trigger={
-                        <span>
-                          {info.getValue().length > 0
-                            ? info
-                                .getValue()
-                                .map((t) => t.name)
-                                .join(", ")
-                            : "-"}
-                        </span>
-                      }
-                    />
-                  </div>
-                  <TagSelector
-                    tags={tags}
-                    agentTags={info.row.original.agentTags}
-                    agentConfigurationId={info.row.original.sId}
-                    owner={owner}
-                    onChange={mutateAgentConfigurations}
-                  />
-                </div>
-              </DataTable.CellContent>
-            ),
-            isFilterable: true,
-            meta: {
-              className: "w-32 xl:w-64",
-              tooltip: "Tags",
-            },
-          },
-        ]
-      : []),
+    {
+      header: "Access",
+      accessorKey: "scope",
+      cell: (info: CellContext<RowData, AgentConfigurationScope>) => (
+        <DataTable.CellContent>
+          {info.getValue() !== "hidden" && (
+            <Chip
+              size="xs"
+              label={SCOPE_INFO[info.getValue()].shortLabel}
+              color={SCOPE_INFO[info.getValue()].color}
+              icon={SCOPE_INFO[info.getValue()].icon}
+            />
+          )}
+        </DataTable.CellContent>
+      ),
+      meta: {
+        className: "w-32",
+      },
+    },
+    {
+      header: "Tags",
+      accessorKey: "agentTagsAsString",
+      cell: (info: CellContext<RowData, string>) => (
+        <DataTable.CellContent grow className="flex flex-row items-center">
+          <div className="group flex flex-row items-center gap-1">
+            <div className="truncate text-muted-foreground dark:text-muted-foreground-night">
+              <Tooltip
+                tooltipTriggerAsChild
+                label={info.getValue()}
+                trigger={<span>{info.getValue()}</span>}
+              />
+            </div>
+            <TableTagSelector
+              tags={tags}
+              agentTags={info.row.original.agentTags}
+              agentConfigurationId={info.row.original.sId}
+              owner={owner}
+              onChange={mutateAgentConfigurations}
+            />
+          </div>
+        </DataTable.CellContent>
+      ),
+      isFilterable: true,
+      meta: {
+        className: "w-32 xl:w-64",
+        tooltip: "Tags",
+      },
+    },
     {
       header: "Usage",
       accessorKey: "usage.messageCount",
@@ -248,7 +181,7 @@ const getTableColumns = ({
       meta: { className: "w-16", tooltip: "Messages in the last 30 days" },
     },
     {
-      header: "Feedbacks",
+      header: "Feedback",
       accessorFn: (row: RowData) => row.feedbacks,
       cell: (info: CellContext<RowData, { up: number; down: number }>) => {
         if (info.row.original.scope === "global") {
@@ -305,94 +238,7 @@ const getTableColumns = ({
   ];
 };
 
-type GlobalAgentActionProps = {
-  agent: LightAgentConfigurationType;
-  owner: WorkspaceType;
-  handleToggleAgentStatus: (
-    agent: LightAgentConfigurationType
-  ) => Promise<void>;
-  showDisabledFreeWorkspacePopup: string | null;
-  setShowDisabledFreeWorkspacePopup: (s: string | null) => void;
-};
-
-function GlobalAgentAction({
-  agent,
-  owner,
-  handleToggleAgentStatus,
-  showDisabledFreeWorkspacePopup,
-  setShowDisabledFreeWorkspacePopup,
-}: GlobalAgentActionProps) {
-  const router = useRouter();
-  if (agent.sId === "helper") {
-    return null;
-  }
-
-  if (agent.sId === "dust") {
-    return (
-      <Button
-        variant="outline"
-        icon={Cog6ToothIcon}
-        size="xs"
-        disabled={!isBuilder(owner)}
-        onClick={(e: Event) => {
-          e.stopPropagation();
-          void router.push(`/w/${owner.sId}/builder/assistants/dust`);
-        }}
-      />
-    );
-  }
-
-  return (
-    <>
-      <SliderToggle
-        size="xs"
-        onClick={async (e) => {
-          e.stopPropagation();
-          await handleToggleAgentStatus(agent);
-        }}
-        selected={agent.status === "active"}
-        disabled={
-          !isBuilder(owner) || agent.status === "disabled_missing_datasource"
-        }
-      />
-      <div className="whitespace-normal" onClick={(e) => e.stopPropagation()}>
-        <Dialog
-          open={showDisabledFreeWorkspacePopup === agent.sId}
-          onOpenChange={(open) => {
-            if (!open) {
-              setShowDisabledFreeWorkspacePopup(null);
-            }
-          }}
-        >
-          <DialogContent size="md">
-            <DialogHeader hideButton={false}>
-              <DialogTitle>Free plan</DialogTitle>
-            </DialogHeader>
-            <DialogContainer>
-              {`@${agent.name} is only available on our paid plans.`}
-            </DialogContainer>
-            <DialogFooter
-              leftButtonProps={{
-                label: "Cancel",
-                variant: "outline",
-                onClick: () => setShowDisabledFreeWorkspacePopup(null),
-              }}
-              rightButtonProps={{
-                label: "Check Dust plans",
-                variant: "primary",
-                onClick: () => {
-                  void router.push(`/w/${owner.sId}/subscription`);
-                },
-              }}
-            />
-          </DialogContent>
-        </Dialog>
-      </div>
-    </>
-  );
-}
-
-type AgentsTableProps = {
+type AssistantsTableProps = {
   owner: WorkspaceType;
   agents: LightAgentConfigurationType[];
   setShowDetails: (agent: LightAgentConfigurationType) => void;
@@ -418,8 +264,10 @@ export function AssistantsTable({
   selection,
   setSelection,
   mutateAgentConfigurations,
-}: AgentsTableProps) {
+}: AssistantsTableProps) {
   const { tags } = useTags({ owner });
+  const sortedTags = useMemo(() => [...tags].sort(tagsSorter), [tags]);
+
   const [showDeleteDialog, setShowDeleteDialog] = useState<{
     open: boolean;
     agentConfiguration: LightAgentConfigurationType | undefined;
@@ -448,8 +296,13 @@ export function AssistantsTable({
           pictureUrl: agentConfiguration.pictureUrl,
           lastUpdate: agentConfiguration.versionCreatedAt,
           feedbacks: agentConfiguration.feedbacks,
+          editors: agentConfiguration.editors,
           scope: agentConfiguration.scope,
           agentTags: agentConfiguration.tags,
+          agentTagsAsString:
+            agentConfiguration.tags.length > 0
+              ? agentConfiguration.tags.map((t) => t.name).join(", ")
+              : "",
           isSelected: selection.includes(agentConfiguration.sId),
           canArchive,
           action:
@@ -511,6 +364,17 @@ export function AssistantsTable({
                       void navigator.clipboard.writeText(
                         agentConfiguration.sId
                       );
+                    },
+                    kind: "item" as const,
+                  },
+                  {
+                    label: "More info",
+                    "data-gtm-label": "assistantMoreInfoButton",
+                    "data-gtm-location": "assistantDetails",
+                    icon: EyeIcon,
+                    onClick: (e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      setShowDetails(agentConfiguration);
                     },
                     kind: "item" as const,
                   },
@@ -581,7 +445,7 @@ export function AssistantsTable({
             data={rows}
             columns={getTableColumns({
               owner,
-              tags,
+              tags: sortedTags,
               isBatchEdit,
               mutateAgentConfigurations,
             })}
